@@ -1,0 +1,28 @@
+{
+  "name": "dungeon_first_steps",
+  "description": "Entering a dungeon: input unlocks, player walks, each step costs one turn.",
+  "scene": "res://game/dungeon/dungeon.tscn",
+  "seed": 1,
+  "watch": {
+    "turn": "TurnManager.turn_number",
+    "phase": "TurnManager.current_phase",
+    "pos": "first('player').grid_pos",
+    "hp": "first('player').hp",
+    "monsters": "count('monsters')"
+  },
+  "observe_groups": ["player", "monsters", "ore_nodes"],
+  "steps": [
+    {"wait_until": "scene._game_started", "timeout": 120},
+    {"eval": "first('player').grid_pos", "as": "start"},
+    {"capture": "entered", "overlay": true},
+    {"assert": "TurnManager.current_phase == 0", "msg": "starts in PLAYER_INPUT"},
+    {"tap": "move_right"}, {"wait_until": "TurnManager.current_phase == 0", "timeout": 120}, {"wait": 20},
+    {"tap": "move_down"}, {"wait_until": "TurnManager.current_phase == 0", "timeout": 120}, {"wait": 20},
+    {"tap": "move_left"}, {"wait_until": "TurnManager.current_phase == 0", "timeout": 120}, {"wait": 20},
+    {"capture": "after_walk", "overlay": true},
+    {"assert": "TurnManager.turn_number >= 1", "msg": "at least one step spent a turn"},
+    {"assert": "first('player').hp == first('player').max_hp", "msg": "walking alone does not hurt"},
+    {"tap": "wait"}, {"wait": 10},
+    {"assert": "TurnManager.turn_number >= 2", "msg": "wait (Space) also ends the turn"}
+  ]
+}

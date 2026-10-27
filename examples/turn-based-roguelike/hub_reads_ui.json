@@ -1,0 +1,9 @@
+{
+  "name": "hub_title_card",
+  "description": "The hub shows its location card on arrival.",
+  "steps": [
+    {"wait": 10},
+    {"assert": "screen_has('Hearthmere')", "msg": "location title visible"},
+    {"observe": "hub"}
+  ]
+}

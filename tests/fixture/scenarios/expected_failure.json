@@ -1,0 +1,10 @@
+{
+  "name": "expected_failure",
+  "description": "Must FAIL: wrong assertion plus an engine error. Proves failures are reported.",
+  "steps": [
+    {"tap": "move_right"},
+    {"assert": "first('player').position.x == 999"},
+    {"eval": "scene.trigger_error()"},
+    {"wait": 2}
+  ]
+}

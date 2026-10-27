@@ -1,0 +1,20 @@
+{
+  "name": "moves_and_clicks",
+  "description": "Action, key and mouse input reach the game; assertions and captures work.",
+  "seed": 7,
+  "watch": {"player_x": "first('player').position.x", "score": "scene.score"},
+  "steps": [
+    {"capture": "start", "overlay": true},
+    {"tap": "move_right"},
+    {"key": "D"},
+    {"assert": "first('player').position.x == 64", "msg": "two steps right"},
+    {"assert": "text('Score') == 'Score: 2'"},
+    {"assert": "screen_has('Score: 2')"},
+    {"click": [272, 20]},
+    {"assert": "scene.clicks == 1", "msg": "button click registered"},
+    {"repeat": 5, "steps": [{"tap": "move_right"}], "until": "first('player').position.x >= 112"},
+    {"assert": "first('player').position.x == 112"},
+    {"set": "first('enemies').position", "value_expr": "Vector2(200, 40)"},
+    {"capture": "end", "overlay": true}
+  ]
+}
