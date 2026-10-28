@@ -32,8 +32,24 @@ STYLE = {
         {"match": "art/anim/*.png", "image": {"size": None, "frame": [16, 16]}},
         {"match": "sfx/*.wav", "audio": {"max_peak_db": -0.5, "max_leading_silence_ms": 10,
                                          "sample_rates": [44100], "channels": 1, "max_duration_s": 1.5}},
+        {"match": "models/*.glb", "model": {"max_tris": 400, "origin": "bottom", "max_size": [1.5, 2.0, 1.5],
+                                            "colors": {"leaf": "#ff004d"}}},
+        {"match": "models/tiny/*.glb", "model": {"max_tris": 10}},
+        {"match": "icons/*.png", "image": {"size": [48, 48]}},
     ],
 }
+
+# Prints which material Godot gives the imported model (it must be the painted shader).
+VERTEX_COLOR_PROBE = """
+extends SceneTree
+func _initialize():
+    var node: Node = load("res://models/tree.glb").instantiate()
+    var mi: MeshInstance3D = node.find_children("*", "MeshInstance3D", true, false)[0]
+    var material: Material = mi.get_active_material(0)
+    print("MATERIAL=", material.resource_path, " ", material.get_class())
+    node.free()
+    quit()
+"""
 
 # Builds a 4-frame, two-tag sprite: a red pixel walking right, idle and pingpong walk.
 ASEPRITE_SCRIPT = """
@@ -116,6 +132,103 @@ class AssetPipelineTest(unittest.TestCase):
         tres = (self.project / "art" / "anim" / "walker.tres").read_text()
         self.assertIn('"name": &"walk"', tres)
         self.assertIn('"duration": 2.0', tres)  # the 200 ms frame lasts twice the 100 ms base
+
+
+    def test_every_mesh_preset_builds_valid_and_regenerates_identical(self):
+        from godot_agent.assets import meshes
+        for preset in meshes.PRESETS:
+            result = pipeline.make_mesh(str(self.project), preset, f"res://models/{preset}.glb", seed=3,
+                                        import_into_godot=False)
+            for r in result["results"]:
+                self.assertTrue(r["ok"], f"{preset}: {r['problems']}")
+        first = (self.project / "models" / "rock.glb").read_bytes()
+        pipeline.regen(str(self.project), "models/rock.glb")
+        self.assertEqual(first, (self.project / "models" / "rock.glb").read_bytes())
+        # The style rule's named colors reach the model: leaves in the fixture palette's red.
+        colors = meshes.analyze_model(self.project / "models" / "tree_round.glb")["vertex_colors"]
+        self.assertTrue(any(meshes._paint_matches(c, [(255, 0, 77)], 30) for c in colors))
+
+    def test_model_check_flags_rule_breaks(self):
+        pipeline.make_mesh(str(self.project), "bush", "res://models/tiny/bush.glb", import_into_godot=False)
+        report = pipeline.check_assets(str(self.project), ["models/tiny/bush.glb"])
+        problems = " | ".join(report["results"][0]["problems"])
+        self.assertIn("triangles, max 10", problems)
+
+    def test_imported_model_shows_its_vertex_colors(self):
+        pipeline.make_mesh(str(self.project), "tree_round", "res://models/tree.glb")
+        self.assertIn('"use_external/path": "res://materials/painted.tres"',
+                      (self.project / "models" / "tree.glb.import").read_text())
+        probe = self.tmp / "probe.gd"
+        probe.write_text(VERTEX_COLOR_PROBE.replace("    ", "\t"))
+        out = subprocess.run(["godot", "--headless", "--path", str(self.project), "-s", str(probe)],
+                             capture_output=True, text=True, timeout=120).stdout
+        self.assertIn("MATERIAL=res://materials/painted.tres ShaderMaterial", out)
+
+    @unittest.skipUnless(shutil.which("Xvfb"), "Xvfb not installed")
+    def test_icon_from_model_is_transparent_around_the_model(self):
+        pipeline.make_mesh(str(self.project), "pumpkin", "res://models/pumpkin.glb", import_into_godot=False)
+        result = pipeline.make_icon(str(self.project), "res://models/pumpkin.glb", "res://icons/pumpkin.png",
+                                    size=48, import_into_godot=False)
+        self.assertTrue(result["ok"], result["problems"])
+        with Image.open(self.project / "icons" / "pumpkin.png") as icon:
+            self.assertEqual(icon.mode, "RGBA")
+            self.assertEqual(icon.getpixel((0, 0))[3], 0)
+            self.assertEqual(icon.getpixel((24, 26))[3], 255)
+
+
+    def test_patterns_and_bevels_reach_the_gltf(self):
+        from godot_agent.assets import meshes
+        recipe = {"colors": {"stone": "#8a8580"}, "parts": [
+            {"shape": "box", "size": [0.6, 0.8, 0.6], "bevel": 0.05, "color": "stone", "pattern": "bricks"},
+            {"shape": "cylinder", "radius": 0.3, "height": 0.2, "sides": 8, "bevel": 0.03, "at": [0, 0.8, 0],
+             "color": "stone", "pattern": "shingles"}]}
+        mesh = meshes.build_mesh(recipe, 1)
+        surface = mesh["surfaces"][0]
+        # Chamfered box: 6 sides, 12 edge strips, 8 corners = 44 triangles. Bevelled 8-sided
+        # cylinder: 3 bands of 8 quads plus two 8-gon caps = 60.
+        self.assertEqual(len(surface["positions"]) // 3, 44 + 60)
+        patterns = {round(c[3] * 16 - 0.5) for c in surface["colors"]}
+        self.assertEqual(patterns, {meshes.PATTERNS.index("bricks"), meshes.PATTERNS.index("shingles")})
+        # UVs are in metres: the box walls reach v = 0.8, their height.
+        self.assertAlmostEqual(max(uv[1] for uv in surface["uvs"]), 0.8, places=2)
+
+    def test_painted_material_is_a_shader_and_replaces_the_old_one(self):
+        old = self.project / "materials" / "painted.tres"
+        old.parent.mkdir(parents=True, exist_ok=True)
+        old.write_text(pipeline._OLD_PAINTED_MATERIAL_TRES)
+        pipeline.make_mesh(str(self.project), "rock", "res://models/rock2.glb", import_into_godot=False)
+        self.assertIn('type="ShaderMaterial"', old.read_text())
+        shader = (self.project / "materials" / "painted.gdshader").read_text()
+        self.assertTrue(shader.startswith("// godot-agent painted"))
+
+    def test_ui_frames_load_as_styleboxes(self):
+        result = pipeline.make_ui(str(self.project), "panel", "res://ui/console", [128, 96])
+        self.assertTrue(result["ok"], result.get("problems"))
+        result = pipeline.make_ui(str(self.project), "button", "res://ui/button", [48, 48], fill="slate")
+        self.assertTrue(result["ok"], result.get("problems"))
+        self.assertEqual(sum(f.endswith(".tres") for f in result["files"]), 4)
+        tres = (self.project / "ui" / "console.tres").read_text()
+        self.assertIn("axis_stretch_horizontal = 2", tres)
+        with Image.open(self.project / "ui" / "console.png") as panel:
+            self.assertEqual(panel.size, (128, 96))
+            self.assertEqual(panel.getpixel((64, 48))[3], 255)
+
+
+    def test_terrain_texture_is_seamless_and_mipmapped(self):
+        result = pipeline.make_texture(str(self.project), "grass", "res://textures/grass.png", size=64,
+                                       import_into_godot=False)
+        self.assertTrue(result["ok"], result["problems"])
+        self.assertIn("mipmaps/generate=true", (self.project / "textures" / "grass.png.import").read_text())
+        with Image.open(self.project / "textures" / "grass.png") as img:
+            px = img.convert("RGB").load()
+            size = img.width
+
+            def column_gap(a: int, b: int) -> float:
+                return sum(sum(abs(px[a, y][c] - px[b, y][c]) for c in range(3)) for y in range(size)) / size
+
+            # Across the wrap the image changes no more than between any two neighbouring columns.
+            inner = sum(column_gap(x, x + 1) for x in range(size - 1)) / (size - 1)
+            self.assertLess(column_gap(size - 1, 0), inner * 1.6)
 
 
 if __name__ == "__main__":

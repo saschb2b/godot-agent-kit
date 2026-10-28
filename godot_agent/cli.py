@@ -58,7 +58,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     summary = run_quick(args.project, scene=args.scene, frames=args.frames, capture_at=capture_at,
                         capture_every=args.capture_every, overlay=args.overlay, seed=args.seed,
                         watch=_parse_watch(args.watch), headless=args.headless, visible=args.visible,
-                        timeout=args.timeout, refresh=not args.no_refresh)
+                        timeout=args.timeout, refresh=not args.no_refresh, renderer=args.renderer)
     return _emit(summary, args.json)
 
 
@@ -67,7 +67,7 @@ def cmd_scenario(args: argparse.Namespace) -> int:
     summary = run_scenarios(args.project, paths=args.paths or None, inline=inline, jobs=args.jobs,
                             determinism=args.determinism, headless=args.headless, visible=args.visible,
                             out=args.out, timeout=args.timeout, refresh=not args.no_refresh,
-                            name_filter=args.filter)
+                            name_filter=args.filter, renderer=args.renderer)
     return _emit(summary, args.json)
 
 
@@ -122,7 +122,7 @@ def _format_result(result: dict) -> str:
     if result.get("frames_resource"):
         lines.append(f"      SpriteFrames: res://{result['frames_resource']}")
     metrics = {k: v for k, v in result.get("metrics", {}).items() if k in (
-        "size", "colors", "silhouette_contrast", "duration_s", "true_peak_db", "loudness_lufs", "rms_db",
+        "size", "tris", "colors", "silhouette_contrast", "duration_s", "true_peak_db", "loudness_lufs", "rms_db",
         "leading_silence_ms")}
     if metrics:
         lines.append("      " + ", ".join(f"{k}={v}" for k, v in metrics.items()))
@@ -166,6 +166,53 @@ def cmd_asset(args: argparse.Namespace) -> int:
                                    import_into_godot=not args.no_import)
         text = "\n".join(_format_result(r) + f"\n      seed: {r['seed']}" for r in result["results"])
         return emit(result, text, all(r["ok"] for r in result["results"]))
+    if args.action == "mesh":
+        from .assets import meshes
+        if args.source == "list":
+            print("presets: " + ", ".join(meshes.PRESETS))
+            return 0
+        if not args.to:
+            raise GodotAgentError("--to res://path/name.glb is required")
+        colors = dict(c.split("=", 1) for c in args.color or [])
+        result = pipeline.make_mesh(args.project, args.source, args.to, seed=args.seed, variants=args.variants,
+                                    colors=colors, style_path=args.style, review=args.review,
+                                    import_into_godot=not args.no_import)
+        text = "\n".join(_format_result(r) + f"\n      seed: {r['seed']}" for r in result["results"])
+        if result.get("preview"):
+            text += f"\n  review: {result['preview']}"
+        return emit(result, text, all(r["ok"] for r in result["results"]))
+    if args.action == "icon":
+        frame = {"trim": args.frame, "background": args.frame_background} if args.frame else None
+        result = pipeline.make_icon(args.project, args.model, args.to, size=args.size, pitch=args.pitch, yaw=args.yaw,
+                                    frame=frame, style_path=args.style, import_into_godot=not args.no_import)
+        return emit(result, _format_result(result), result["ok"])
+    if args.action == "texture":
+        from .assets import textures
+        if args.preset == "list":
+            print("presets: " + ", ".join(textures.PRESETS))
+            return 0
+        if not args.to:
+            raise GodotAgentError("--to res://textures/name.png is required")
+        colors = dict(c.split("=", 1) for c in args.color or [])
+        result = pipeline.make_texture(args.project, args.preset, args.to, size=args.size, seed=args.seed,
+                                       colors=colors, style_path=args.style, import_into_godot=not args.no_import)
+        return emit(result, _format_result(result), result["ok"])
+    if args.action == "ui":
+        from .assets import ui
+        if args.preset == "list":
+            print(f"presets: {', '.join(ui.PRESETS)}\nfills: {', '.join(ui.FILLS)}\ntrims: {', '.join(ui.TRIMS)}")
+            return 0
+        if not args.to:
+            raise GodotAgentError("--to res://ui/frames/name is required")
+        size = [int(v) for v in args.size.lower().split("x")]
+        result = pipeline.make_ui(args.project, args.preset, args.to, size, fill=args.fill, trim=args.trim,
+                                  fill_color=args.fill_color, border=args.border, seed=args.seed,
+                                  import_into_godot=not args.no_import)
+        text = (f"{'OK  ' if result['ok'] else 'FAIL'}  {result['path']}\n" +
+                "\n".join(f"      wrote: {f}" for f in result.get("files", [])) +
+                "".join(f"\n      problem: {p}" for p in result.get("problems", [])) +
+                (f"\n      preview: {result['preview']}" if result.get("preview") else ""))
+        return emit(result, text, result["ok"])
     if args.action == "review":
         print("\n".join(pipeline.review(args.project, args.paths or None, args.style, args.out)))
         return 0
@@ -174,6 +221,23 @@ def cmd_asset(args: argparse.Namespace) -> int:
         results = result.get("results", [result])
         return emit(result, "\n".join(_format_result(r) for r in results), all(r["ok"] for r in results))
     return 2
+
+
+def cmd_clip(args: argparse.Namespace) -> int:
+    """Captures of a scenario run (its folder, or a run folder plus --scenario) -> GIF/WebP."""
+    folder = Path(args.run).expanduser()
+    if args.scenario:
+        folder = folder / args.scenario
+    frames = sorted((folder / "captures").glob("*.png"))
+    if args.skip:
+        frames = frames[args.skip:]
+    if args.limit:
+        frames = frames[: args.limit]
+    if not frames:
+        raise GodotAgentError(f"no captures in {folder / 'captures'}; capture with capture_every in the scenario")
+    crop = tuple(int(v) for v in args.crop.split(",")) if args.crop else None
+    print(sheet.clip(frames, Path(args.out).expanduser(), fps=args.fps, width=args.width, crop=crop))
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -193,6 +257,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--visible", action="store_true", help="real window at real speed, to watch it")
         p.add_argument("--timeout", type=int, default=180, help="wall-clock seconds per run (default 180)")
         p.add_argument("--no-refresh", action="store_true", help="skip the class-cache staleness check")
+        p.add_argument("--renderer", choices=["forward_plus", "mobile", "gl_compatibility"],
+                       help="override the project's renderer, e.g. gl_compatibility to see the web build's look")
         p.add_argument("--json", action="store_true", help="print the full summary as JSON")
 
     p = sub.add_parser("run", help="boot a scene for N frames: errors, telemetry, captures")
@@ -276,11 +342,58 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--peak-db", type=float, default=-1.0)
     p.add_argument("--mutate", type=float, default=0.0, help="randomize parameters by +-this fraction")
     p.add_argument("--no-import", action="store_true")
-    p = asset_parser("review", "review sheets: images on the game's background, audio as waveform + spectrogram")
+    p = asset_parser("mesh", "build low-poly .glb models from a seeded preset or recipe .json ('list' shows presets)")
+    p.add_argument("source", help="preset name or recipe .json")
+    p.add_argument("--to", help="destination .glb, e.g. res://models/props/tree.glb")
+    p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--variants", type=int, default=1, help="write N files with seeds seed..seed+N-1")
+    p.add_argument("--color", action="append", metavar="NAME=#HEX", help="override a recipe color (repeatable)")
+    p.add_argument("--review", action="store_true", help="render turntable views and a true-scale lineup")
+    p.add_argument("--no-import", action="store_true")
+    p = asset_parser("icon", "render a 3D model to a transparent PNG icon at a 3/4 view")
+    p.add_argument("model", help="model file, e.g. res://models/towers/arrow.glb")
+    p.add_argument("--to", required=True, help="destination .png, e.g. res://ui/icons/arrow.png")
+    p.add_argument("--size", type=int, default=64)
+    p.add_argument("--pitch", type=float, default=30.0, help="degrees the camera looks down")
+    p.add_argument("--yaw", type=float, default=35.0, help="degrees around the model")
+    p.add_argument("--frame", choices=["gold", "iron", "bronze", "wood"],
+                   help="paint a backdrop and bevelled border in this trim (command-card style)")
+    p.add_argument("--frame-background", default="#2b3d5c", help="backdrop colour for --frame")
+    p.add_argument("--no-import", action="store_true")
+    p = asset_parser("texture", "paint a seamless terrain texture with mipmapped import ('list' shows presets)")
+    p.add_argument("preset", help="grass, meadow, path, dirt, sand, mud, rock, cobble, or list")
+    p.add_argument("--to", help="destination .png, e.g. res://textures/grass.png")
+    p.add_argument("--size", type=int, default=256)
+    p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--color", action="append", metavar="NAME=#HEX", help="override a preset colour (repeatable)")
+    p.add_argument("--no-import", action="store_true")
+    p = asset_parser("ui", "paint nine-slice UI frames + StyleBoxTexture .tres ('list' shows presets, fills, trims)")
+    p.add_argument("preset", help="panel, bar, tooltip, button (4 states), slot, frame, or list")
+    p.add_argument("--to", help="destination without extension, e.g. res://ui/frames/console")
+    p.add_argument("--size", default="96x96", help="WxH in pixels")
+    p.add_argument("--fill", default="stone", help="stone, wood, leather, slate")
+    p.add_argument("--fill-color", help="hex colour for the fill")
+    p.add_argument("--trim", default="gold", help="gold, iron, bronze, wood")
+    p.add_argument("--border", type=int, help="trim width in pixels")
+    p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--no-import", action="store_true")
+    p = asset_parser("review", "review sheets: images on the game's background, audio as waveform + spectrogram, "
+                               "models as turntables")
     p.add_argument("paths", nargs="*")
     p.add_argument("-o", "--out", help="output folder")
     p = asset_parser("regen", "rebuild an asset exactly as asset_manifest.json recorded it")
     p.add_argument("path")
+
+    p = sub.add_parser("clip", help="turn a scenario's captures into an animated GIF or WebP")
+    p.add_argument("run", help="scenario output folder (…/runs/<project>/<time>/<scenario>) or a run folder")
+    p.add_argument("--scenario", help="scenario name inside a run folder")
+    p.add_argument("-o", "--out", required=True, help="clip.gif or clip.webp")
+    p.add_argument("--fps", type=float, default=15.0)
+    p.add_argument("--width", type=int, default=640)
+    p.add_argument("--crop", help="x0,y0,x1,y1 in capture pixels, e.g. to leave out the HUD")
+    p.add_argument("--skip", type=int, default=0, help="drop the first N captures")
+    p.add_argument("--limit", type=int, default=0, help="keep at most N captures")
+    p.set_defaults(func=cmd_clip)
 
     p = sub.add_parser("sheet", help="combine images into one contact sheet")
     p.add_argument("images", nargs="+")

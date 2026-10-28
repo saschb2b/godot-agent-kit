@@ -93,6 +93,48 @@ func screen_has(substring: String) -> bool:
 	return false
 
 
+## Viewport pixel (capture coordinates) of a Node3D or Vector3 seen through the
+## active camera, a Node2D, a Control's centre, or a Vector2 passed through.
+## Returns Vector2(-1, -1) for a point behind the camera or an unknown target.
+func screen_pos(target: Variant) -> Vector2:
+	if target is Vector2 or target is Vector2i:
+		return Vector2(target)
+	if target is String or target is NodePath:
+		target = node(str(target))
+	if target is Control:
+		# Canvas coordinates (layer and canvas transform included), not window pixels.
+		var control := target as Control
+		return control.get_global_transform_with_canvas() * (control.size * 0.5)
+	if target is Node2D:
+		return (target as Node2D).get_global_transform_with_canvas().origin
+	if target is Node3D:
+		target = (target as Node3D).global_position
+	if target is Vector3 or target is Vector3i:
+		var cam := camera()
+		var point := Vector3(target)
+		if cam == null or cam.is_position_behind(point):
+			return Vector2(-1, -1)
+		return cam.unproject_position(point)
+	return Vector2(-1, -1)
+
+
+## Where a viewport pixel meets the horizontal plane y = height (a 3D ground pick).
+func world_at(x: float, y: float, height: float = 0.0) -> Vector3:
+	var cam := camera()
+	if cam == null:
+		return Vector3.INF
+	var origin := cam.project_ray_origin(Vector2(x, y))
+	var direction := cam.project_ray_normal(Vector2(x, y))
+	if absf(direction.y) < 1e-6:
+		return Vector3.INF
+	return origin + direction * ((height - origin.y) / direction.y)
+
+
+## The active 3D camera of the main viewport.
+func camera() -> Camera3D:
+	return _tree.root.get_camera_3d()
+
+
 func pressed(action: String) -> bool:
 	return Input.is_action_pressed(action)
 

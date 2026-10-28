@@ -39,9 +39,13 @@ godot_api_search / godot_api_show (exact signatures for the installed version) i
 Live editing of scenes and interactive play are the separate godot MCP's job.
 
 Assets: the project's asset_style.json (draft one with asset_init) is the style contract.
-asset_check after adding or changing art or audio; asset_conform to bring any image into style;
-asset_aseprite_import after drawing with the aseprite MCP (load the project's palettes/*.gpl);
-asset_sfx for sound effects; asset_review to look at images and listen by looking at audio.
+asset_check after adding or changing art, models or audio; asset_conform to bring any image into
+style; asset_aseprite_import after drawing with the aseprite MCP (load the project's palettes/*.gpl);
+asset_mesh for low-poly 3D models from seeded recipes; asset_icon to render a model as a UI icon;
+asset_ui for painted nine-slice panels, buttons and frames; asset_texture for seamless painted
+terrain textures;
+asset_sfx for sound effects; asset_review to look at images and models and to listen by looking
+at audio.
 """
 
 SCENARIO_REFERENCE = """\
@@ -51,6 +55,7 @@ Scenario JSON:
   "seed": 1, "timeout_frames": 3600, "fail_on_errors": true, "ignore_errors": ["regex"],
   "watch": {"hp": "first('player').hp"}, "watch_every": 0, "capture_every": 0,
   "observe_groups": ["player", "enemies"], "observe_props": ["hp", "grid_pos"],
+  "time_scale": 1 (8 = eight times the game time per frame, for long simulations),
   "steps": [ ...one key per step... ]
 }
 Steps:
@@ -59,6 +64,9 @@ Steps:
   {"wait_signal": "TurnManager.turn_ended", "timeout": 600}
   {"tap": "move_right", "hold": 2, "after": 1}    InputMap action; also "press"/"release"
   {"key": "Space"} | {"click": [x, y]}            viewport pixels = capture coordinates
+  {"click": "expr", "button": "right"}            expr gives a Vector3/Node3D (projected through
+                                                  the camera), Node2D, Control (centre) or Vector2
+  {"hover": [x, y] | "expr"}                      move the mouse only (previews, tooltips)
   {"eval": "expr", "as": "name"}                  call methods; store result as a variable
   {"set": "first('player').hp", "value": 1}       or "value_expr": "Vector2(3, 4)"
   {"assert": "expr", "msg": "...", "fatal": false}
@@ -70,7 +78,9 @@ Expressions are Godot Expression syntax. Inputs: every autoload by name, engine 
 (ResourceLoader, Input, Time, ...), scene (current scene), frame, vars, stored variables.
 Helpers: resource(path), node(path), first(group), group(name), count(group),
 has(obj, prop), set_prop(obj, prop, v), text(node_or_path), visible_text(), screen_has(s),
-pressed(action), scene_path(), paused().
+pressed(action), scene_path(), paused(), screen_pos(node_or_vec3), world_at(x, y, height),
+camera(). Expressions cannot hold lambdas; put loops in a helper script and call it, e.g.
+{"eval": "resource('res://tests/bot.gd').new()", "as": "bot"} then {"eval": "bot.step(scene)"}.
 """
 
 mcp = FastMCP("godot-agent", instructions=INSTRUCTIONS)
@@ -176,15 +186,17 @@ def asset_init(project: str, force: bool = False) -> list:
 
 @mcp.tool()
 def asset_check(project: str, paths: list[str] | None = None, review: bool = True) -> list:
-    """Validate images and audio against asset_style.json: size/frame grid, palette, color count,
-    binary alpha, stray pixels, silhouette contrast on the game background, animation baseline
-    jitter, Godot import settings, true peak, loudness (LUFS/RMS), leading silence, loop seams.
-    review=True also returns a sheet of the images, failures first."""
+    """Validate images, 3D models and audio against asset_style.json: size/frame grid, palette,
+    color count, binary alpha, stray pixels, silhouette contrast on the game background, animation
+    baseline jitter, Godot import settings; model triangles, size, origin, materials, vertex colors
+    against the palette; true peak, loudness (LUFS/RMS), leading silence, loop seams.
+    review=True also returns a sheet of the images and turntables of the models, failures first."""
     def run() -> list:
         report = pipeline.check_assets(project, paths, review=review)
         content: list = [pipeline.format_check(report)]
-        if report.get("review_sheet"):
-            content.append(_image(report["review_sheet"]))
+        for key in ("review_sheet", "model_review_sheet"):
+            if report.get(key):
+                content.append(_image(report[key]))
         return content
     return _asset_guard(run)
 
@@ -217,7 +229,7 @@ def asset_aseprite_import(project: str, source: str, to: str) -> list:
 def asset_sfx(project: str, preset: str, to: str, seed: int = 1, variants: int = 1, mutate: float = 0.0,
               peak_db: float = -1.0) -> list:
     """Generate sound effects with a seeded chiptune synthesizer. Presets: pickup, laser, explosion,
-    powerup, hit, jump, blip, door, step, magic, death. variants=N writes N files (seeds seed..);
+    powerup, hit, jump, blip, door, step, magic, death, arrow, cannon, build, horn. variants=N writes N files (seeds seed..);
     mutate=0.1 nudges every parameter by up to 10%. Same preset and seed give the same file;
     the recipe is stored in asset_manifest.json. Returns validation and a waveform + spectrogram
     sheet, since sound has to be judged by looking."""
@@ -231,15 +243,79 @@ def asset_sfx(project: str, preset: str, to: str, seed: int = 1, variants: int =
 
 
 @mcp.tool()
+def asset_mesh(project: str, source: str, to: str, seed: int = 1, variants: int = 1,
+               colors: dict[str, str] | None = None, review: bool = True) -> list:
+    """Build low-poly 3D models (.glb) from a preset or a recipe .json: parts (box, cylinder, cone,
+    sphere, rock, wedge) with sizes, transforms, named colors, jitter, repeats around a ring, chance;
+    any number may be a [min, max] range drawn from the seed. Presets: tree_round, tree_pine, bush,
+    rock, grass_tuft, flower, mushroom, stump, pumpkin, crystal. Colors resolve recipe < style rule
+    "colors" < `colors`, so presets take the project palette. Writes the .glb plus a .import that
+    shows its vertex colors, records the recipe for asset_regen, validates (triangles, size, origin,
+    palette) and returns turntable views with a true-scale lineup. Recipe format: see the skill."""
+    def run() -> list:
+        result = pipeline.make_mesh(project, source, to, seed=seed, variants=variants, colors=colors, review=review)
+        text = "\n".join(_format_result(r) + f"\n      seed: {r['seed']}" for r in result["results"])
+        return [text] + ([_image(result["preview"], 1000)] if result.get("preview") else [])
+    return _asset_guard(run)
+
+
+@mcp.tool()
+def asset_icon(project: str, model: str, to: str, size: int = 64, pitch: float = 30.0, yaw: float = 35.0,
+               frame: str | None = None, frame_background: str = "#2b3d5c") -> list:
+    """Render a 3D model (.glb, or a res:// mesh or scene) to a PNG icon at a 3/4 view, for command
+    cards, inventories and portraits. Transparent by default; frame="gold"|"iron"|"bronze"|"wood"
+    paints a backdrop and a bevelled border like a strategy-game command button. Uses the project's
+    painted material, recorded for asset_regen, validated against the image rule for `to`."""
+    def run() -> list:
+        framed = {"trim": frame, "background": frame_background} if frame else None
+        result = pipeline.make_icon(project, model, to, size=size, pitch=pitch, yaw=yaw, frame=framed)
+        return [_format_result(result), _image(result["preview"], 256)]
+    return _asset_guard(run)
+
+
+@mcp.tool()
+def asset_texture(project: str, preset: str, to: str, size: int = 256, seed: int = 1,
+                  colors: dict[str, str] | None = None) -> list:
+    """Paint a seamless, hand-painted terrain texture: grass (blade strokes), meadow (with flowers),
+    path and dirt (pebbles, cracks), sand, mud (wet sheen), rock and cobble (lit stone plates).
+    Colours: preset names dark/mid/light/tip/pebble/lichen/flower_a.. overridable per call or by the
+    style rule's "colors". Writes the PNG with a mipmapped .import; returns it tiled 2x2 so seams
+    would show. Sample it in a terrain shader with world-space UVs."""
+    def run() -> list:
+        result = pipeline.make_texture(project, preset, to, size=size, seed=seed, colors=colors)
+        return [_format_result(result), _image(result["preview"], 512)]
+    return _asset_guard(run)
+
+
+@mcp.tool()
+def asset_ui(project: str, preset: str, to: str, size: list[int], fill: str = "stone", trim: str = "gold",
+             fill_color: str | None = None, border: int | None = None, seed: int = 1) -> list:
+    """Paint nine-slice UI pieces and their StyleBoxTexture .tres: preset panel (gilded double trim,
+    corner plates, studs), bar, tooltip, button (normal/hover/pressed/disabled files), slot
+    (recessed), frame (border only, for portraits and minimaps). fill: stone, wood, leather, slate;
+    trim: gold, iron, bronze, wood. The centre tiles seamlessly. `to` has no extension
+    (res://ui/frames/console); use the .tres as a theme StyleBox."""
+    def run() -> list:
+        result = pipeline.make_ui(project, preset, to, size, fill=fill, trim=trim, fill_color=fill_color,
+                                  border=border, seed=seed)
+        text = "\n".join([f"{'OK' if result['ok'] else 'FAIL'} {result['path']}"] + result.get("files", [])
+                         + result.get("problems", []))
+        return [text] + ([_image(result["preview"], 800)] if result.get("preview") else [])
+    return _asset_guard(run)
+
+
+@mcp.tool()
 def asset_review(project: str, paths: list[str] | None = None) -> list:
-    """Look at assets: images on the game's background color (pixel-crisp, pass/fail borders) and
-    audio as waveform over spectrogram (attack, decay and pitch movement are visible)."""
+    """Look at assets: images on the game's background color (pixel-crisp, pass/fail borders),
+    3D models as turntables plus a true-scale lineup on a 1-unit grid, and audio as waveform over
+    spectrogram (attack, decay and pitch movement are visible)."""
     return _asset_guard(lambda: [_image(sheet, 1000) for sheet in pipeline.review(project, paths)])
 
 
 @mcp.tool()
 def asset_regen(project: str, path: str) -> list:
-    """Rebuild an asset exactly as asset_manifest.json recorded it (sfx, conform, aseprite import)."""
+    """Rebuild an asset exactly as asset_manifest.json recorded it (sfx, mesh, icon, conform,
+    aseprite import)."""
     def run() -> list:
         result = pipeline.regen(project, path)
         return ["\n".join(_format_result(r) for r in result.get("results", [result]))]

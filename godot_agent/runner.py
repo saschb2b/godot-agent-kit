@@ -19,7 +19,7 @@ from . import sheet
 from .env import (CACHE_DIR, RUNTIME_DIR, GodotAgentError, find_godot, project_name,
                   refresh_class_cache, resolve_project, virtual_display)
 
-STEP_KINDS = ("wait", "wait_until", "wait_signal", "press", "release", "tap", "key", "click",
+STEP_KINDS = ("wait", "wait_until", "wait_signal", "press", "release", "tap", "key", "click", "hover",
               "eval", "set", "scene", "assert", "capture", "observe", "log", "repeat")
 DEFAULT_SCENARIO_DIRS = ("tests/scenarios", "scenarios", ".godot-agent/scenarios")
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -137,7 +137,8 @@ def _ignored(message: str, patterns: list) -> bool:
 
 # ── Running ──
 
-def run_job(godot: str, project: Path, job: Job, display: str | None, visible: bool, timeout: int) -> dict:
+def run_job(godot: str, project: Path, job: Job, display: str | None, visible: bool, timeout: int,
+            renderer: str | None = None) -> dict:
     job.out_dir.mkdir(parents=True, exist_ok=True)
     # A private user:// directory per run: saves cannot leak between runs or
     # touch the developer's real save files, and parallel runs cannot collide.
@@ -150,7 +151,13 @@ def run_job(godot: str, project: Path, job: Job, display: str | None, visible: b
     elif display:
         env["DISPLAY"] = display
         env.pop("WAYLAND_DISPLAY", None)
-        cmd += ["--display-driver", "x11", "--audio-driver", "Dummy"]
+        # Top-left of a large virtual screen: the X pointer rests at the screen's
+        # centre, outside the window, so no real mouse events reach the game.
+        cmd += ["--display-driver", "x11", "--audio-driver", "Dummy", "--position", "0,0"]
+    if visible:
+        env["GODOT_AGENT_VISIBLE"] = "1"
+    if renderer:
+        cmd += ["--rendering-method", renderer]
     cmd += ["--path", str(project)]
     if not visible:
         # Fixed timestep: same inputs give the same frames, as fast as the CPU allows.
@@ -206,6 +213,7 @@ def run_job(godot: str, project: Path, job: Job, display: str | None, visible: b
         warnings=len(log_warnings),
         shutdown=[e["message"] for e in shutdown_errors][:5],
         final_watches=result.get("final_watches", {}),
+        vars=result.get("vars", {}),
         telemetry=result.get("telemetry", {}),
         captures=[str(job.out_dir / c["path"]) for c in captures],
         skipped_captures=sum(1 for c in result.get("captures", []) if c.get("skipped")),
@@ -221,7 +229,7 @@ def run_job(godot: str, project: Path, job: Job, display: str | None, visible: b
 def run_scenarios(project: str | os.PathLike, paths: list[str] | None = None, inline: dict | None = None,
                   jobs: int = 4, determinism: bool = False, headless: bool = False, visible: bool = False,
                   out: str | None = None, timeout: int = 180, refresh: bool = True,
-                  name_filter: str | None = None) -> dict:
+                  name_filter: str | None = None, renderer: str | None = None) -> dict:
     godot = find_godot()
     project_path = resolve_project(project)
     started = time.monotonic()
@@ -260,7 +268,8 @@ def run_scenarios(project: str | os.PathLike, paths: list[str] | None = None, in
         if wants_render and not visible and display is None:
             notes.append("Xvfb not installed: ran headless, captures skipped (run install.sh)")
         with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-            records = list(pool.map(lambda j: run_job(godot, project_path, j, display, visible, timeout), job_list))
+            records = list(pool.map(lambda j: run_job(godot, project_path, j, display, visible, timeout, renderer),
+                                    job_list))
 
     if determinism:
         records = [_merge_determinism(records[i], records[i + 1]) for i in range(0, len(records), 2)]
@@ -285,7 +294,7 @@ def run_scenarios(project: str | os.PathLike, paths: list[str] | None = None, in
 def run_quick(project: str | os.PathLike, scene: str | None = None, frames: int = 120,
               capture_at: list[int] | None = None, capture_every: int = 0, overlay: bool = False,
               seed: int = 0, watch: dict | None = None, headless: bool = False, visible: bool = False,
-              timeout: int = 180, refresh: bool = True) -> dict:
+              timeout: int = 180, refresh: bool = True, renderer: str | None = None) -> dict:
     """Boot a scene for N frames, capture it, report errors and telemetry."""
     steps: list[dict] = []
     elapsed = 0
@@ -304,7 +313,7 @@ def run_quick(project: str | os.PathLike, scene: str | None = None, frames: int 
     if watch:
         scenario["watch"] = watch
     return run_scenarios(project, inline=scenario, headless=headless, visible=visible,
-                         timeout=timeout, refresh=refresh)
+                         timeout=timeout, refresh=refresh, renderer=renderer)
 
 
 # ── Determinism ──
@@ -393,6 +402,9 @@ def format_summary(summary: dict) -> str:
                 lines.append(f"        at exit: {message}")
         elif r.get("errors"):
             lines.append(f"        {len(r['errors'])} engine errors (ignored or not failing)")
+        if r.get("vars"):
+            shown = ", ".join(f"{k}={json.dumps(v)[:60]}" for k, v in list(r["vars"].items())[:6])
+            lines.append(f"        vars: {shown}")
         if r.get("contact_sheet"):
             lines.append(f"        sheet: {r['contact_sheet']}")
     lines.append(f"  run: {summary['run_dir']}/summary.json")

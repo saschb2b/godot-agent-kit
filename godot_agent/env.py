@@ -120,7 +120,7 @@ def refresh_class_cache(godot: str, project: Path, force: bool = False, timeout:
 
 
 @contextlib.contextmanager
-def virtual_display(width: int = 1920, height: int = 1080):
+def virtual_display(width: int = 5120, height: int = 2880):
     """Starts a private Xvfb server and yields its DISPLAY, or None when Xvfb is missing."""
     xvfb = shutil.which("Xvfb")
     if not xvfb:

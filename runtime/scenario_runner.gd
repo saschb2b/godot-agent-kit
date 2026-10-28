@@ -17,6 +17,7 @@ const STEP_KINDS := [
 	"tap",
 	"key",
 	"click",
+	"hover",
 	"eval",
 	"set",
 	"scene",
@@ -83,6 +84,22 @@ func setup(
 	_overlay = load(base_dir.path_join("overlay.gd")).new()
 	_timeout_frames = int(scenario.get("timeout_frames", 3600))
 	_headless = DisplayServer.get_name() == "headless"
+	if _headless:
+		_match_rendered_viewport()
+
+
+## A headless window has no size, so a stretched root viewport turns square
+## (1280x1280 for a 1280x720 project) and UI and camera framing differ from a
+## rendered run. Keeping the aspect gives the project's own viewport size.
+func _match_rendered_viewport() -> void:
+	var root := _tree.root
+	if root.content_scale_mode == Window.CONTENT_SCALE_MODE_DISABLED:
+		root.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+		root.content_scale_size = Vector2i(
+			int(ProjectSettings.get_setting("display/window/size/viewport_width", 1152)),
+			int(ProjectSettings.get_setting("display/window/size/viewport_height", 648))
+		)
+	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_KEEP
 
 
 func _ready() -> void:
@@ -113,6 +130,12 @@ func _process(_delta: float) -> void:
 
 
 func _run() -> void:
+	# Game time per frame: 4 runs four times as many physics ticks per frame, so long
+	# simulations finish sooner (up to Engine.max_physics_steps_per_frame, raised to fit).
+	var time_scale := float(_scenario.get("time_scale", 1.0))
+	if time_scale != 1.0:
+		Engine.time_scale = time_scale
+		Engine.max_physics_steps_per_frame = maxi(8, ceili(time_scale) + 1)
 	var scene_path: String = _scenario.get("scene", "")
 	if scene_path.is_empty():
 		scene_path = ProjectSettings.get_setting("application/run/main_scene", "")
@@ -163,6 +186,11 @@ func _exec(step: Dictionary) -> void:
 			await _frames(int(step.get("after", 1)))
 		"click":
 			await _click(step)
+		"hover":
+			var at: Variant = _point(step, "hover")
+			if at != null:
+				_mouse_motion(at)
+				await _frames(int(step.get("after", 1)))
 		"eval":
 			var value: Variant = _eval(str(step["eval"]))
 			if step.has("as"):
@@ -326,17 +354,17 @@ func _key(key_name: String, is_pressed: bool) -> void:
 	Input.parse_input_event(event)
 
 
-## "click": [x, y] in viewport pixels (the coordinates of a capture image).
+## "click": [x, y] in viewport pixels (the coordinates of a capture image), or an
+## expression for a point: a Vector3 or Node3D (projected through the active
+## camera), a Node2D, a Control (its centre) or a Vector2.
+##   {"click": "Vector3(4, 0, 2)"}  {"click": "node('HUD/BuildArrow')"}
+## "button": 1 left (default), 2 right, 3 middle, or "left"/"right"/"middle".
 func _click(step: Dictionary) -> void:
-	var point: Array = step["click"]
-	var viewport_pos := Vector2(float(point[0]), float(point[1]))
-	# Input events arrive in window coordinates; the root viewport may be stretched.
-	var window_pos: Vector2 = _tree.root.get_final_transform() * viewport_pos
-	var button := int(step.get("button", MOUSE_BUTTON_LEFT))
-	var motion := InputEventMouseMotion.new()
-	motion.position = window_pos
-	motion.global_position = window_pos
-	Input.parse_input_event(motion)
+	var at: Variant = _point(step, "click")
+	if at == null:
+		return
+	var button := _button(step.get("button", MOUSE_BUTTON_LEFT))
+	var window_pos := _mouse_motion(at)
 	await _frames(1)
 	for is_pressed: bool in [true, false]:
 		var event := InputEventMouseButton.new()
@@ -347,6 +375,44 @@ func _click(step: Dictionary) -> void:
 		event.button_mask = (1 << (button - 1)) if is_pressed else 0
 		Input.parse_input_event(event)
 		await _frames(int(step.get("hold", 1)) if is_pressed else int(step.get("after", 1)))
+
+
+## The viewport pixel a click or hover step aims at, or null (after failing the step).
+func _point(step: Dictionary, key: String) -> Variant:
+	var spec: Variant = step[key]
+	if spec is Array and (spec as Array).size() == 2:
+		return Vector2(float(spec[0]), float(spec[1]))
+	var target: Variant = _eval(str(spec)) if spec is String else spec
+	var pos: Vector2 = _helpers.screen_pos(target)
+	if pos == Vector2(-1, -1):
+		_fail(step, "%s target %s is not on screen (got %s)" % [key, spec, target], true)
+		return null
+	return pos
+
+
+## Moves the mouse to a viewport pixel; returns the window position used.
+func _mouse_motion(viewport_pos: Vector2) -> Vector2:
+	# Input events arrive in window coordinates; the root viewport may be stretched.
+	var window_pos: Vector2 = _tree.root.get_final_transform() * viewport_pos
+	var motion := InputEventMouseMotion.new()
+	motion.position = window_pos
+	motion.global_position = window_pos
+	Input.parse_input_event(motion)
+	# The OS pointer is left alone: parallel runs share one virtual display, so
+	# warping it would send stray motion events into the other runs' windows.
+	# Games see the pointer through input events (and Viewport.get_mouse_position
+	# inside _input); a game that polls the OS pointer only works with --visible.
+	if OS.get_environment("GODOT_AGENT_VISIBLE") == "1":
+		_tree.root.warp_mouse(viewport_pos)
+	return window_pos
+
+
+func _button(value: Variant) -> int:
+	if value is String:
+		return {"left": MOUSE_BUTTON_LEFT, "right": MOUSE_BUTTON_RIGHT, "middle": MOUSE_BUTTON_MIDDLE}.get(
+			value, MOUSE_BUTTON_LEFT
+		)
+	return int(value)
 
 
 ## "set": "first('player').hp", "value": 1 — or "value_expr": "Vector2i(3, 4)".
@@ -766,6 +832,7 @@ func _finish(reason: String) -> void:
 		"expression_errors": _expr_errors,
 		"errors": errors,
 		"final_watches": final_watches,
+		"vars": _vars_report(),
 		"captures": _captures,
 		"observations": _observations,
 		"steps": _step_log,
@@ -778,6 +845,16 @@ func _finish(reason: String) -> void:
 	# at exit), which the CLI reports separately instead of failing the run.
 	print(RESULT_MARKER)
 	_tree.quit(0 if passed else 1)
+
+
+## Values stored with {"eval": ..., "as": name}, readable, so a scenario can be
+## used to look things up as well as to assert them.
+func _vars_report() -> Dictionary:
+	var report := {}
+	for key: String in _vars:
+		var value: Variant = _vars[key]
+		report[key] = str(value).left(300) if value is Object else _json(value)
+	return report
 
 
 func _matches_any(text: String, patterns: Array) -> bool:

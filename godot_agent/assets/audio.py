@@ -198,6 +198,19 @@ def _preset_params(preset: str, rng: random.Random) -> dict:
                               arp_time=u(0.06, 0.12), sustain=u(0.15, 0.3), decay=u(0.2, 0.4)),
         "death": lambda: dict(wave=rng.choice(["square", "saw"]), freq=u(300, 500), slide=-u(1.5, 3),
                               vibrato_depth=u(0.3, 1), vibrato_speed=u(6, 12), sustain=u(0.1, 0.2), decay=u(0.3, 0.5)),
+        # A short airy whoosh: a bow or thrown weapon leaving.
+        "arrow": lambda: dict(wave="noise", freq=u(1400, 2400), slide=-u(0.8, 1.6), highpass=u(500, 900),
+                              lowpass=u(5000, 8000), attack=0.004, sustain=u(0.015, 0.03), decay=u(0.1, 0.16)),
+        # A low thump with a noisy tail: cannon, mortar, catapult.
+        "cannon": lambda: dict(wave="noise", freq=u(45, 80), slide=-u(0.6, 1.2), lowpass=u(900, 1500),
+                               punch=u(0.6, 0.9), sustain=u(0.03, 0.06), decay=u(0.35, 0.5)),
+        # A wooden knock: placing, building, hammering.
+        "build": lambda: dict(wave="triangle", freq=u(110, 170), slide=-u(1.5, 2.5), punch=u(0.7, 0.9),
+                              highpass=60, sustain=u(0.02, 0.04), decay=u(0.12, 0.2)),
+        # A swelling brass-like call: wave start, alarm, fanfare.
+        "horn": lambda: dict(wave="saw", freq=u(160, 240), slide=u(0.05, 0.15), vibrato_depth=u(0.15, 0.3),
+                             vibrato_speed=u(4, 6), lowpass=u(1400, 2200), attack=u(0.04, 0.08),
+                             sustain=u(0.35, 0.5), decay=u(0.25, 0.35)),
     }
     if preset not in recipes:
         raise KeyError(preset)
@@ -206,7 +219,8 @@ def _preset_params(preset: str, rng: random.Random) -> dict:
     return params
 
 
-PRESETS = ("pickup", "laser", "explosion", "powerup", "hit", "jump", "blip", "door", "step", "magic", "death")
+PRESETS = ("pickup", "laser", "explosion", "powerup", "hit", "jump", "blip", "door", "step", "magic", "death",
+           "arrow", "cannon", "build", "horn")
 
 
 def preset_params(preset: str, seed: int) -> dict:

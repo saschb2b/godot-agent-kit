@@ -1,0 +1,20 @@
+{
+  "name": "clicks_in_3d",
+  "description": "Clicks and hovers aimed at 3D points and nodes land on them; overlay marks 3D nodes.",
+  "scene": "res://world3d.tscn",
+  "seed": 1,
+  "observe_groups": ["crates"],
+  "steps": [
+    {"click": "Vector3(1.5, 0, -1)"},
+    {"assert": "scene.last_click.distance_to(Vector3(1.5, 0, -1)) < 0.05", "msg": "a Vector3 click lands on that ground point"},
+    {"click": "first('crates')", "button": "right"},
+    {"assert": "scene.last_click.distance_to(first('crates').global_position) < 0.05", "msg": "a Node3D click lands on the node"},
+    {"assert": "scene.last_button == 2", "msg": "button 'right' sends the right button"},
+    {"hover": "Vector3(-1, 0, 2)"},
+    {"assert": "scene.last_hover.distance_to(Vector3(-1, 0, 2)) < 0.05", "msg": "hover moves the mouse there"},
+    {"eval": "screen_pos(Vector3(2, 0, 1))", "as": "p"},
+    {"assert": "world_at(p.x, p.y).distance_to(Vector3(2, 0, 1)) < 0.01", "msg": "screen_pos and world_at invert each other"},
+    {"assert": "screen_pos(Vector3(0, 0, 50)) == Vector2(-1, -1)", "msg": "points behind the camera are reported off screen"},
+    {"capture": "crates", "overlay": true}
+  ]
+}

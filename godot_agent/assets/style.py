@@ -10,7 +10,9 @@ A project keeps its spec in `asset_style.json` at the project root:
       "rules": [
         {"match": "**/*.png", "image": {"binary_alpha": true}},
         {"match": "assets/icons/*.png", "image": {"size": [16, 16], "palette": "icons", "max_colors": 16}},
-        {"match": "assets/audio/sfx/**", "audio": {"max_peak_db": -1.0, "max_leading_silence_ms": 30}}
+        {"match": "assets/audio/sfx/**", "audio": {"max_peak_db": -1.0, "max_leading_silence_ms": 30}},
+        {"match": "models/props/*.glb", "model": {"max_tris": 300, "origin": "bottom-center",
+                                                  "colors": {"leaf": "#c8662a"}}}
       ]
     }
 
@@ -32,6 +34,7 @@ STYLE_FILE = "asset_style.json"
 MANIFEST_FILE = "asset_manifest.json"
 IMAGE_EXTENSIONS = {".png", ".webp", ".jpg", ".jpeg", ".bmp", ".tga"}
 AUDIO_EXTENSIONS = {".wav", ".ogg", ".mp3", ".flac"}
+MODEL_EXTENSIONS = {".glb", ".gltf"}
 
 
 @lru_cache(maxsize=512)
@@ -86,6 +89,8 @@ def kind_of(path: str) -> str | None:
         return "image"
     if suffix in AUDIO_EXTENSIONS:
         return "audio"
+    if suffix in MODEL_EXTENSIONS:
+        return "model"
     return None
 
 

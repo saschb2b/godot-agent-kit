@@ -2,6 +2,7 @@
 ##
 ## Marks every node in the observed groups with a crosshair and its name, so a
 ## vision model can tie what it sees in the image to entries in the observation.
+## 3D nodes are marked where the active camera projects their origin.
 extends CanvasLayer
 
 const COLORS := [
@@ -30,10 +31,23 @@ func _on_draw() -> void:
 	for gi in groups.size():
 		var color: Color = COLORS[gi % COLORS.size()]
 		for n in get_tree().get_nodes_in_group(groups[gi]):
-			if not n is CanvasItem or not (n as CanvasItem).is_visible_in_tree():
+			var pos := Vector2.ZERO
+			if n is Node3D:
+				# Projected through the active camera; skip what the camera cannot see.
+				var cam := get_viewport().get_camera_3d()
+				var world := (n as Node3D).global_position
+				if (
+					cam == null
+					or not (n as Node3D).is_visible_in_tree()
+					or not cam.is_position_in_frustum(world)
+				):
+					continue
+				pos = cam.unproject_position(world)
+			elif n is CanvasItem and (n as CanvasItem).is_visible_in_tree():
+				# Canvas transform included, so this is the on-screen position.
+				pos = (n as CanvasItem).get_global_transform_with_canvas().origin
+			else:
 				continue
-			# Canvas transform included, so this is the on-screen position.
-			var pos := (n as CanvasItem).get_global_transform_with_canvas().origin
 			_canvas.draw_line(pos + Vector2(-4, 0), pos + Vector2(4, 0), color, 1.0)
 			_canvas.draw_line(pos + Vector2(0, -4), pos + Vector2(0, 4), color, 1.0)
 			_canvas.draw_string_outline(
