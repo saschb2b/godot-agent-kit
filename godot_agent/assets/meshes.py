@@ -946,7 +946,8 @@ def _run_model_script(project: Path, listing: dict, frames: Path, timeout: int) 
     cmd = [find_godot(), "--path", str(project), "--display-driver", "x11", "--audio-driver", "Dummy",
            "--resolution", "64x64", "-s", str(RUNTIME_DIR / "model_review.gd"), "--",
            f"--ga-list={list_file}", f"--ga-out={frames}"]
-    with virtual_display() as display:
+    from ..runner import render_slot
+    with render_slot(), virtual_display() as display:
         if display is None:
             raise GodotAgentError("rendering models needs Xvfb (sudo apt install xvfb)")
         env = dict(os.environ, DISPLAY=display)

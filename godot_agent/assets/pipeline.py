@@ -641,7 +641,9 @@ def make_blender(project_dir: str, script: str, dest: str, seed: int = 1, params
     cmd = [blender, "-b", "--factory-startup", "--python-exit-code", "1", "-P", str(runner), "--",
            "--script", str(source), "--out", str(target), "--seed", str(seed),
            "--params", json.dumps(params or {})]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    from ..runner import render_slot
+    with render_slot():  # (a Blender build holds as much memory as a rendered Godot run)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if proc.returncode != 0 or not target.exists():
         log = (proc.stdout + proc.stderr).strip().splitlines()
         errors = [line for line in log if "Error" in line or "Traceback" in line or line.startswith("  File")]
