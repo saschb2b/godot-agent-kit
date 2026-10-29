@@ -6,6 +6,7 @@ Needs Godot and Pillow; the Aseprite test is skipped when aseprite is missing.
 """
 
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -18,7 +19,7 @@ sys.path.insert(0, str(KIT))
 
 from PIL import Image, ImageDraw  # noqa: E402
 
-from godot_agent.assets import pipeline  # noqa: E402
+from godot_agent.assets import manifest, pipeline  # noqa: E402
 
 PICO8 = ["#000000", "#1d2b53", "#7e2553", "#008751", "#ab5236", "#5f574f", "#c2c3c7", "#fff1e8",
          "#ff004d", "#ffa300", "#ffec27", "#00e436", "#29adff", "#83769c", "#ff77a8", "#ffccaa"]
@@ -106,6 +107,20 @@ class AssetPipelineTest(unittest.TestCase):
         self.assertTrue(result["ok"], result["problems"])
         self.assertEqual(result["metrics"]["size"], [16, 16])
         self.assertTrue(Path(result["preview"]).exists())
+
+    def test_regen_reruns_a_project_script(self):
+        # A project's own painter, recorded as a script entry, is rerun by regen.
+        script = self.project / "art_src" / "paint.py"
+        script.parent.mkdir(parents=True, exist_ok=True)
+        (self.project / "art").mkdir(exist_ok=True)
+        script.write_text("import sys\nfrom PIL import Image\nImage.new('RGBA', (8, 8), sys.argv[2]).save(sys.argv[1])\n")
+        manifest.record(self.project, "art/painted.png", {"tool": "script", "script": "art_src/paint.py",
+                                                          "regen": "python3 art_src/paint.py art/painted.png #c08040"})
+        result = pipeline.regen(str(self.project), "art/painted.png")
+        self.assertTrue(result["ok"], result["problems"])
+        self.assertEqual(Image.open(self.project / "art" / "painted.png").getpixel((4, 4)), (192, 128, 64, 255))
+        manifest.record(self.project, "art/unwritten.png", {"tool": "script", "regen": "python3 -c pass"})
+        self.assertFalse(pipeline.regen(str(self.project), "art/unwritten.png")["ok"])
 
     def test_check_flags_a_broken_sprite(self):
         broken = self.project / "art" / "broken.png"
@@ -226,6 +241,117 @@ class AssetPipelineTest(unittest.TestCase):
         with Image.open(self.project / "ui" / "console.png") as panel:
             self.assertEqual(panel.size, (128, 96))
             self.assertEqual(panel.getpixel((64, 48))[3], 255)
+
+    def test_console_paints_every_piece_from_a_spec(self):
+        spec = self.project / "art" / "console.json"
+        spec.parent.mkdir(parents=True, exist_ok=True)
+        spec.write_text(json.dumps({"wing": {"well": [16, 14, 160, 104]}, "strip": {"cap": 40, "period": 48}}))
+        result = pipeline.make_ui(str(self.project), "console", "res://ui/hud", [96, 96], spec="art/console.json")
+        self.assertTrue(result["ok"], result.get("problems"))
+        for name in ("wing_left.png", "wing_right.png", "crest.png", "rail.png", "strip.tres", "tooltip.tres",
+                     "button_hover.tres", "banner.png", "plate.png", "layout.json"):
+            self.assertIn(f"ui/hud/{name}", result["files"])
+        layout = json.loads((self.project / "ui" / "hud" / "layout.json").read_text())
+        self.assertEqual(layout["map_well"], [16, 154 - 14 - 104, 160, 104],
+                         "wells are given from the top of their piece")
+        self.assertEqual(layout["card_well"][0], 240 - 16 - 160, "the right wing is mirrored")
+        x, y, w, h = layout["window"]
+        with Image.open(self.project / "ui" / "hud" / "crest.png") as crest:
+            self.assertLess(crest.getpixel((x + w // 2, y + h - 10))[3], 16, "the portrait window is clear")
+        with Image.open(self.project / "ui" / "hud" / "wing_left.png") as wing:
+            wx, wy, ww, wh = layout["map_well"]
+            self.assertEqual(wing.getpixel((wx + ww // 2, wy + wh // 2))[3], 255, "the minimap well is solid")
+            self.assertEqual(wing.getpixel((wing.width - 4, 10))[3], 0, "the wing dips to the rail")
+        tres = (self.project / "ui" / "hud" / "strip.tres").read_text()
+        self.assertIn("texture_margin_left = 40.0", tres)
+        self.assertIn("axis_stretch_horizontal = 1", tres)
+        with Image.open(self.project / "ui" / "hud" / "strip.png") as strip:
+            px = strip.convert("RGB").load()
+            # The bar repeats from the cap to the end, so the strip can grow without a seam.
+            gap = sum(sum(abs(px[40, y][c] - px[strip.width - 1, y][c]) for c in range(3)) for y in range(30))
+            step = sum(sum(abs(px[40, y][c] - px[41, y][c]) for c in range(3)) for y in range(30))
+            self.assertLess(gap, step * 2 + 60)
+        entry = json.loads((self.project / "asset_manifest.json").read_text())["assets"]["ui/hud/crest.png"]
+        self.assertEqual(entry["options"], {"spec": "art/console.json"})
+
+    def test_console_paints_hd_art_at_a_scale(self):
+        spec = self.project / "art" / "console_hd.json"
+        spec.parent.mkdir(parents=True, exist_ok=True)
+        spec.write_text(json.dumps({"scale": 2}))
+        result = pipeline.make_ui(str(self.project), "console", "res://ui/hd", [96, 96], spec="art/console_hd.json",
+                                  import_into_godot=False)
+        self.assertTrue(result["ok"], result.get("problems"))
+        layout = json.loads((self.project / "ui" / "hd" / "layout.json").read_text())
+        self.assertEqual(layout["scale"], 2)
+        self.assertEqual(layout["wing"], [240, 154], "the layout stays in layout pixels")
+        with Image.open(self.project / "ui" / "hd" / "wing_left.png") as wing:
+            self.assertEqual(wing.size, (480, 308), "the art carries twice the texels")
+        tres = (self.project / "ui" / "hd" / "strip.tres").read_text()
+        self.assertIn("texture_margin_left = 88.0", tres, "nine-slice margins are in texels")
+        self.assertIn("mipmaps/generate=true", (self.project / "ui" / "hd" / "crest.png.import").read_text(),
+                      "art drawn smaller than its texels gets mipmaps")
+
+    def test_console_rim_is_one_line_and_meets_the_arch_in_a_fillet(self):
+        from godot_agent.assets import ui
+        # The arch (centre 116, radius 76) meets a shoulder at 108 on a fillet: the profile
+        # never steps, and right of the arch it eases down to the shoulder.
+        arc = ui._fillet(116, 80, 76, 108, 10, 1)
+        xs = [x / 4 for x in range(760, 800)]
+        heights = [max(80 + math.sqrt(max(0.0, 76 ** 2 - (x - 116) ** 2)), 108, arc(x)) for x in xs]
+        steps = [a - b for a, b in zip(heights, heights[1:])]
+        self.assertLess(max(steps), 3.0, "no stair-step where the arch meets the shoulder")
+        self.assertGreater(arc(190), 108, "the fillet fills the inside corner")
+        spec = self.project / "art" / "console_rim.json"
+        spec.parent.mkdir(parents=True, exist_ok=True)
+        spec.write_text(json.dumps({"rail": 28, "shadow": 14}))
+        pipeline.make_ui(str(self.project), "console", "res://ui/rim", [96, 96], spec="art/console_rim.json",
+                         import_into_godot=False)
+        with Image.open(self.project / "ui" / "rim" / "rail.png") as rail:
+            # Down from the rail's top edge: bright bronze, then stone, once; no second bead.
+            px = rail.convert("RGBA").load()
+            column = [sum(px[32, y][:3]) for y in range(rail.height) if px[32, y][3] == 255]
+        # Count the highlights: rises of more than 30 after a fall, while still brighter
+        # than the stone (a second bead inside the rim would make two).
+        stone = sorted(column)[len(column) // 2]
+        peaks, low, rising = 0, column[0], True
+        for a, b in zip(column, column[1:]):
+            if b < a:
+                if rising and a > stone * 1.5 and a - low > 30:
+                    peaks += 1
+                rising = False
+                low = min(low, b) if not rising else b
+            elif b > a and not rising:
+                rising, low = True, a
+        self.assertEqual(peaks, 1, f"one bright rim, not two: {column}")
+
+    def test_command_icon_hue_bevel_and_foot(self):
+        from godot_agent.assets import ui
+        subject = Image.new("RGBA", (216, 216), (0, 0, 0, 0))
+        ImageDraw.Draw(subject).rectangle((90, 10, 126, 206), fill=(230, 230, 230, 255))
+        icon = ui.icon_frame(subject, trim="hue", background="#3d6cb4", edge="#0a1226", size=108, foot=0.22)
+        self.assertEqual(icon.size, (108, 108))
+        r, g, b, _ = icon.getpixel((0, 54))
+        self.assertLess(r + g + b, 40, "a dark line round the edge")
+        self.assertGreater(b, r, "in the backdrop's own hue, not a metal trim")
+        self.assertGreater(sum(icon.getpixel((54, 3))[:3]), sum(icon.getpixel((54, 104))[:3]),
+                           "a light catch at the top")
+        # The subject stays above the foot, and the foot is shaded for the cost.
+        self.assertLess(sum(icon.getpixel((54, 100))[:3]), 120, "the foot is clear of the subject and dark")
+        self.assertGreater(sum(icon.getpixel((54, 70))[:3]), 500, "the subject stands above it")
+        with self.assertRaises(ValueError):
+            ui.icon_frame(subject, trim="hue")
+
+    def test_command_icon_frame_fills_the_button(self):
+        from godot_agent.assets import ui
+        subject = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+        ImageDraw.Draw(subject).rectangle((52, 40, 76, 88), fill=(220, 40, 40, 255))
+        icon = ui.icon_frame(subject, trim="bronze", background="#3d6cb4", edge="#0a1226", size=64)
+        self.assertEqual(icon.size, (64, 64))
+        r, g, b, a = icon.getpixel((32, 34))
+        self.assertGreater(r, 150, "the subject is scaled up to fill the button")
+        self.assertLess(sum(icon.getpixel((0, 32))[:3]), 60, "a dark outline round the bevel")
+        self.assertGreater(sum(icon.getpixel((1, 20))[:3]), sum(icon.getpixel((62, 44))[:3]),
+                           "the bevel is lit at the top left")
 
 
     def test_terrain_texture_is_seamless_and_mipmapped(self):

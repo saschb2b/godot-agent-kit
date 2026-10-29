@@ -184,7 +184,14 @@ def cmd_asset(args: argparse.Namespace) -> int:
         return emit(result, text, all(r["ok"] for r in result["results"]))
     if args.action == "icon":
         frame = {"trim": args.frame, "background": args.frame_background} if args.frame else None
-        result = pipeline.make_icon(args.project, args.model, args.to, size=args.size, pitch=args.pitch, yaw=args.yaw,
+        size = args.size
+        if frame and args.frame_edge:
+            # Command-button look: the subject is cropped to fill it, so render at twice the size.
+            frame.update({"edge": args.frame_edge, "size": size})
+            if args.frame_foot:
+                frame["foot"] = args.frame_foot
+            size *= 2
+        result = pipeline.make_icon(args.project, args.model, args.to, size=size, pitch=args.pitch, yaw=args.yaw,
                                     frame=frame, style_path=args.style, import_into_godot=not args.no_import)
         return emit(result, _format_result(result), result["ok"])
     if args.action == "blender":
@@ -216,7 +223,7 @@ def cmd_asset(args: argparse.Namespace) -> int:
             raise GodotAgentError("--to res://ui/frames/name is required")
         size = [int(v) for v in args.size.lower().split("x")]
         result = pipeline.make_ui(args.project, args.preset, args.to, size, fill=args.fill, trim=args.trim,
-                                  fill_color=args.fill_color, border=args.border, seed=args.seed,
+                                  fill_color=args.fill_color, border=args.border, seed=args.seed, spec=args.spec,
                                   import_into_godot=not args.no_import)
         text = (f"{'OK  ' if result['ok'] else 'FAIL'}  {result['path']}\n" +
                 "\n".join(f"      wrote: {f}" for f in result.get("files", [])) +
@@ -366,9 +373,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--size", type=int, default=64)
     p.add_argument("--pitch", type=float, default=30.0, help="degrees the camera looks down")
     p.add_argument("--yaw", type=float, default=35.0, help="degrees around the model")
-    p.add_argument("--frame", choices=["gold", "iron", "bronze", "wood"],
-                   help="paint a backdrop and bevelled border in this trim (command-card style)")
+    p.add_argument("--frame", choices=["gold", "iron", "bronze", "wood", "hue"],
+                   help="paint a backdrop and bevelled border in this trim (command-card style); hue (with "
+                        "--frame-edge) draws the border in the backdrop's own colours")
     p.add_argument("--frame-background", default="#2b3d5c", help="backdrop colour for --frame")
+    p.add_argument("--frame-edge", help="with --frame: the backdrop glows from --frame-background to this colour "
+                                        "at the rim, and the subject is cropped to fill the button, rim-lit and "
+                                        "shadowed (a Reforged-style command icon)")
+    p.add_argument("--frame-foot", type=float, default=0.0,
+                   help="with --frame-edge: keep this fraction of the height clear of the subject at the bottom, "
+                        "shaded, so a cost drawn there sits on shadow (e.g. 0.2)")
     p.add_argument("--no-import", action="store_true")
     p = asset_parser("blender", "build a .glb with a Blender Python script (helpers: godot_agent/blender/gab.py)")
     p.add_argument("script", help="build script, e.g. art_src/blender/pine.py")
@@ -386,8 +400,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--color", action="append", metavar="NAME=#HEX", help="override a preset colour (repeatable)")
     p.add_argument("--no-import", action="store_true")
     p = asset_parser("ui", "paint nine-slice UI frames + StyleBoxTexture .tres ('list' shows presets, fills, trims)")
-    p.add_argument("preset", help="panel, bar, tooltip, button (4 states), slot, frame, or list")
-    p.add_argument("--to", help="destination without extension, e.g. res://ui/frames/console")
+    p.add_argument("preset", help="panel, bar, tooltip, button (4 states), slot, frame, console, or list")
+    p.add_argument("--to", help="destination without extension, e.g. res://ui/frames/console (console: a folder)")
+    p.add_argument("--spec", help="console: JSON spec of the pieces (sizes, wells, window, crest), e.g. "
+                                  "art_src/ui/console.json; missing keys take the kit's defaults")
     p.add_argument("--size", default="96x96", help="WxH in pixels")
     p.add_argument("--fill", default="stone", help="stone, wood, leather, slate")
     p.add_argument("--fill-color", help="hex colour for the fill")

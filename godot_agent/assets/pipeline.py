@@ -6,6 +6,7 @@ import collections
 import json
 import math
 import re
+import shlex
 import statistics
 import subprocess
 import time
@@ -669,15 +670,29 @@ def make_blender(project_dir: str, script: str, dest: str, seed: int = 1, params
 # ── UI frames ──
 
 def make_ui(project_dir: str, preset: str, dest: str, size: list[int], fill: str = "stone", trim: str = "gold",
-            fill_color: str | None = None, border: int | None = None, seed: int = 1,
+            fill_color: str | None = None, border: int | None = None, seed: int = 1, spec: str | None = None,
             import_into_godot: bool = True, record: bool = True) -> dict:
-    """Paints a nine-slice UI piece (panel, bar, tooltip, button states, slot, frame) and its StyleBoxTexture."""
+    """Paints a nine-slice UI piece (panel, bar, tooltip, button states, slot, frame) and its StyleBoxTexture,
+    or with preset "console" every piece of a bottom console described by the JSON `spec`, into the folder `dest`."""
     from . import ui
     project = resolve_project(project_dir)
     rel = rel_path(project, dest)
     rel = rel[: -len(Path(rel).suffix)] if Path(rel).suffix in (".png", ".tres") else rel
     options = {"fill": fill, "trim": trim, "fill_color": fill_color, "border": border, "seed": seed}
-    written = ui.write(preset, project / rel, f"res://{rel}", tuple(size), **options)
+    paint_options = dict(options)
+    if preset == "console":
+        if not spec:
+            raise GodotAgentError("the console preset needs --spec, a JSON file such as art_src/ui/console.json")
+        spec_file = Path(spec).expanduser()
+        if not spec_file.is_absolute():
+            spec_file = project / rel_path(project, spec)
+        if not spec_file.exists():
+            raise GodotAgentError(f"No console spec at {spec_file}")
+        # The console takes everything from its spec: record only that, for regen.
+        options = {"spec": spec_file.resolve().relative_to(project).as_posix()
+                   if spec_file.resolve().is_relative_to(project) else str(spec_file.resolve())}
+        paint_options = {"spec": json.loads(spec_file.read_text())}
+    written = ui.write(preset, project / rel, f"res://{rel}", tuple(size), **paint_options)
     rels = [w.relative_to(project).as_posix() for w in written]
     if record:
         for out in rels:
@@ -759,4 +774,24 @@ def regen(project_dir: str, path: str, style_path: str | None = None) -> dict:
                          yaw=entry["yaw"], frame=entry.get("frame"), style_path=style_path)
     if entry["tool"] == "aseprite":
         return import_aseprite(str(project), entry["source"], entry["dest"], style_path)
+    if entry["tool"] == "script":
+        return _regen_script(project, rel, entry)
     raise GodotAgentError(f"unknown tool in manifest: {entry['tool']}")
+
+
+def _regen_script(project: Path, rel: str, entry: dict) -> dict:
+    """Reruns the project's own generator for a file, e.g. a Pillow painter under art_src/ recorded as
+    {"tool": "script", "regen": "python3 art_src/ui/console.py ..."}. It runs in the project folder, without a
+    shell, and must rewrite the file."""
+    command = shlex.split(entry.get("regen", ""))
+    if not command:
+        raise GodotAgentError(f"{rel}: a script entry needs a \"regen\" command")
+    before = (project / rel).stat().st_mtime_ns if (project / rel).exists() else None
+    proc = subprocess.run(command, cwd=project, capture_output=True, text=True)
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout).strip().splitlines()[-5:]
+        return {"path": rel, "ok": False, "problems": [f"{entry['regen']} exited {proc.returncode}", *tail]}
+    if not (project / rel).exists() or (project / rel).stat().st_mtime_ns == before:
+        return {"path": rel, "ok": False, "problems": [f"{entry['regen']} did not write {rel}"]}
+    godot_import(project)
+    return {"path": rel, "ok": True, "problems": [], "notes": [], "steps": [entry["regen"]]}

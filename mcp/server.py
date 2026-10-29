@@ -261,14 +261,25 @@ def asset_mesh(project: str, source: str, to: str, seed: int = 1, variants: int 
 
 @mcp.tool()
 def asset_icon(project: str, model: str, to: str, size: int = 64, pitch: float = 30.0, yaw: float = 35.0,
-               frame: str | None = None, frame_background: str = "#2b3d5c") -> list:
+               frame: str | None = None, frame_background: str = "#2b3d5c", frame_edge: str | None = None,
+               frame_foot: float = 0.0) -> list:
     """Render a 3D model (.glb, or a res:// mesh or scene) to a PNG icon at a 3/4 view, for command
     cards, inventories and portraits. Transparent by default; frame="gold"|"iron"|"bronze"|"wood"
-    paints a backdrop and a bevelled border like a strategy-game command button. Uses the project's
-    painted material, recorded for asset_regen, validated against the image rule for `to`."""
+    paints a backdrop and a bevelled border like a strategy-game command button. frame_edge (a hex
+    colour) gives the Reforged-style button instead: a glow from frame_background to frame_edge, the
+    subject cropped to fill it, rim-lit and shadowed; with it, frame="hue" draws the border in the
+    backdrop's own colours, and frame_foot (e.g. 0.2) keeps that fraction of the bottom clear and
+    shaded for a cost. Uses the project's painted material, recorded for asset_regen, validated
+    against the image rule for `to`."""
     def run() -> list:
         framed = {"trim": frame, "background": frame_background} if frame else None
-        result = pipeline.make_icon(project, model, to, size=size, pitch=pitch, yaw=yaw, frame=framed)
+        render = size
+        if framed and frame_edge:
+            framed.update({"edge": frame_edge, "size": size})
+            if frame_foot:
+                framed["foot"] = frame_foot
+            render = size * 2
+        result = pipeline.make_icon(project, model, to, size=render, pitch=pitch, yaw=yaw, frame=framed)
         return [_format_result(result), _image(result["preview"], 256)]
     return _asset_guard(run)
 
@@ -305,15 +316,19 @@ def asset_texture(project: str, preset: str, to: str, size: int = 256, seed: int
 
 @mcp.tool()
 def asset_ui(project: str, preset: str, to: str, size: list[int], fill: str = "stone", trim: str = "gold",
-             fill_color: str | None = None, border: int | None = None, seed: int = 1) -> list:
+             fill_color: str | None = None, border: int | None = None, seed: int = 1,
+             spec: str | None = None) -> list:
     """Paint nine-slice UI pieces and their StyleBoxTexture .tres: preset panel (gilded double trim,
     corner plates, studs), bar, tooltip, button (normal/hover/pressed/disabled files), slot
     (recessed), frame (border only, for portraits and minimaps). fill: stone, wood, leather, slate;
     trim: gold, iron, bronze, wood. The centre tiles seamlessly. `to` has no extension
-    (res://ui/frames/console); use the .tres as a theme StyleBox."""
+    (res://ui/frames/console); use the .tres as a theme StyleBox. Preset console paints a whole
+    strategy-game bottom console in one material (bronze over stone, recessed wells, an arched
+    portrait window with one crest) into the folder `to`, from the JSON `spec` (e.g.
+    art_src/ui/console.json), plus layout.json with the wells and windows for the HUD to load."""
     def run() -> list:
         result = pipeline.make_ui(project, preset, to, size, fill=fill, trim=trim, fill_color=fill_color,
-                                  border=border, seed=seed)
+                                  border=border, seed=seed, spec=spec)
         text = "\n".join([f"{'OK' if result['ok'] else 'FAIL'} {result['path']}"] + result.get("files", [])
                          + result.get("problems", []))
         return [text] + ([_image(result["preview"], 800)] if result.get("preview") else [])
