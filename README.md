@@ -94,9 +94,10 @@ Rule keys are listed in [skill/SKILL.md](skill/SKILL.md#assets).
 
 ## Example
 
-[Lantern Hollow](https://github.com/saschb2b/Tower-Defense) is a small tower defense built with the kit:
-every model, texture, icon, console frame and sound comes from `godot-agent asset`, and its gameplay is
-covered by scenarios (`tests/scenarios/`), including a scripted player that must win all eight waves.
+[Groundhold](https://github.com/saschb2b/Groundhold) is a co-op and competitive tower defense built with the
+kit: every model, texture, icon, console frame and sound comes from `godot-agent asset`, its gameplay is covered
+by scenarios (`tests/scenarios/`), including a scripted player that must win every wave, and its lockstep
+multiplayer is tested with `--sim-lint` and topology scenarios against its real server.
 
 ## How it works
 
