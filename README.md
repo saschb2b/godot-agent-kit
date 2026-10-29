@@ -9,8 +9,8 @@ project's autoloads load as usual.
 | Piece | What it gives an agent |
 |---|---|
 | `godot-agent run` | Boot a scene for N frames; captures, errors, telemetry, watched values |
-| `godot-agent scenario` | JSON input scripts with assertions, run in parallel, optional determinism diff |
-| `godot-agent check` | Every script (and scene) loaded in one process; parse errors by file:line |
+| `godot-agent scenario` | JSON input scripts with assertions, run in parallel, optional determinism diff; tick-exact fast-forward; multi-process topologies (a server plus headless clients) with state-hash comparison |
+| `godot-agent check` | Every script (and scene) loaded in one process; parse errors by file:line; a determinism lint for lockstep simulation code |
 | `godot-agent api` | Offline class reference pinned to the installed Godot version |
 | `godot-agent asset` | Style rules per asset folder, validation of images, 3D models and audio, conforming any image to the style, Aseprite import to SpriteFrames, low-poly 3D models from seeded recipes with painted surface patterns, rigged and animated models from Blender build scripts, alpha-cut foliage cards, UI icons rendered from models, painted nine-slice UI frames, seeded sound effects, review sheets and model turntables, reproducible rebuilds |
 | MCP server `godot-agent` | The same, with captures returned as images |
@@ -39,11 +39,29 @@ godot-agent check ~/Documents/GitHub/my-game
 godot-agent run ~/Documents/GitHub/my-game --scene res://levels/a.tscn --capture-at 1,60,120 --overlay
 godot-agent scenario ~/Documents/GitHub/my-game            # tests/scenarios/*.json
 godot-agent scenario ~/Documents/GitHub/my-game --determinism
+godot-agent check ~/Documents/GitHub/my-game --sim-lint scripts/sim   # lockstep simulation code
 godot-agent api search tween property
 godot-agent api show Input.parse_input_event
 ```
 
 The scenario format and agent workflow are documented in [skill/SKILL.md](skill/SKILL.md).
+
+### Lockstep and networked games
+
+- `"ticks_per_frame": 8` in a scenario sets `Engine.get_meta("godot_agent_ticks_per_frame")` before
+  the scene loads, and `{"set_ticks_per_frame": 2}` changes it. A game that steps its own simulation
+  runs that many ticks per frame, so fast-forwarding stays tick-exact. (`time_scale` under the fixed
+  timestep stretches each tick instead; the run notes it.)
+- `godot-agent check <project> --sim-lint scripts/sim` fails on floats, trigonometry, engine RNGs,
+  float vectors, the scene tree, clocks, `hash()` and Node types in that folder. A line can allow a
+  token with a reason: `# sim-lint: allow <token> <reason>`.
+- `"topology"` runs a server command and N headless Godot clients of the project: readiness from a
+  regex on the server's output (its `port` group fills `{port}` in the clients' arguments), per-client
+  arguments and steps, per-process logs, merged pass/fail, one global timeout, and every process
+  stopped with its children. With `"compare_hashes": true` the `HASH <tick> <hex>` lines the clients
+  print must agree; the report names the first tick that differs.
+- `"deterministic": false` keeps a scenario out of `--determinism`; topologies are kept out unless
+  they set it to true.
 Runs are written to `~/.cache/godot-agent/runs/<project>/<time>/` (the last 30 are kept).
 
 ## Asset pipeline
@@ -98,8 +116,20 @@ covered by scenarios (`tests/scenarios/`), including a scripted player that must
 godot-agent scenario tests/fixture
 ```
 
-`moves_and_clicks` and `clicks_in_3d` must pass. `expected_failure` must fail with an assertion and an
-engine error.
+`moves_and_clicks`, `clicks_in_3d` and `ticks_per_frame` must pass. `expected_failure` must fail with
+an assertion and an engine error.
+
+```bash
+python3 -m unittest discover tests
+```
+
+Runs every self-test. Besides the asset pipeline below: `test_ticks` (the fast-forward hook and the
+`time_scale` note), `test_sim_lint` (every forbidden token, look-alikes that pass, strings and
+comments, allow comments, and `check --sim-lint` failing a copy of the fixture) and `test_topology`
+(the fixture's echo server `tests/fixture/net/echo_server.py` with two clients that join the port
+it printed and print HASH lines: agreement, a divergence reported at its first tick, a timeout that
+stops the clients, the server and a child the server forked, a server that never gets ready, and
+the determinism opt-out).
 
 ```bash
 python3 -m unittest tests/test_assets.py -v

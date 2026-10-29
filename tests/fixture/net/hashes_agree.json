@@ -1,0 +1,20 @@
+{
+  "name": "hashes_agree",
+  "description": "An echo server and two clients that join it on the port it printed; their HASH lines agree.",
+  "scene": "res://net/net_client.tscn",
+  "ticks_per_frame": 4,
+  "compare_hashes": true,
+  "topology": {
+    "server": {"cmd": ["{python}", "net/echo_server.py", "--port", "0"],
+               "ready": "listening on port (?P<port>\\d+)"},
+    "clients": [
+      {"args": ["--", "--join=127.0.0.1:{port}"]},
+      {"args": ["--", "--join=127.0.0.1:{port}"], "scenario": "client2_steps.json"}
+    ]
+  },
+  "steps": [
+    {"wait_until": "scene.echoed", "timeout": 600},
+    {"wait_until": "scene.tick >= 300", "timeout": 600},
+    {"assert": "scene.tick >= 300"}
+  ]
+}

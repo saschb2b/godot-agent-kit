@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import signal
 import sys
 from pathlib import Path
 
@@ -79,7 +80,8 @@ def _emit(summary: dict, as_json: bool) -> int:
 
 def cmd_check(args: argparse.Namespace) -> int:
     result = check_project(args.project, resources=args.resources, lint=args.lint,
-                           include_addons=args.include_addons, refresh=not args.no_refresh)
+                           include_addons=args.include_addons, refresh=not args.no_refresh,
+                           sim_lint=args.sim_lint)
     print(json.dumps(result, indent=2) if args.json else format_check(result))
     return 0 if result["ok"] else 1
 
@@ -305,6 +307,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("project")
     p.add_argument("--resources", action="store_true", help="also load every .tscn/.tres")
     p.add_argument("--lint", action="store_true", help="also run gdlint")
+    p.add_argument("--sim-lint", action="append", metavar="PATH",
+                   help="also fail on non-deterministic tokens (floats, trig, engine RNG, time, nodes...) in the "
+                        ".gd files under PATH, e.g. scripts/sim; '# sim-lint: allow <token> <reason>' excuses a line "
+                        "(repeatable)")
     p.add_argument("--include-addons", action="store_true")
     p.add_argument("--no-refresh", action="store_true")
     p.add_argument("--json", action="store_true")
@@ -437,8 +443,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _terminate(signum: int, _frame: object) -> None:
+    """SIGTERM: stop the processes a topology started in their own sessions, then exit."""
+    from .topology import kill_live
+    kill_live()
+    raise SystemExit(128 + signum)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _terminate)
     try:
         return args.func(args)
     except GodotAgentError as exc:

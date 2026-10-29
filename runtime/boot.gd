@@ -8,6 +8,8 @@
 ## scenario runner to the root and let it drive the game.
 extends SceneTree
 
+const TICKS_PER_FRAME_META := &"godot_agent_ticks_per_frame"
+
 var _runner  # scenario_runner.gd instance
 
 
@@ -41,6 +43,11 @@ func _initialize() -> void:
 	# Seed the global RNG (randi, randf, shuffle, pick_random). RandomNumberGenerator
 	# instances that call randomize() are not covered; see the determinism check.
 	seed(int(scenario.get("seed", 0)))
+
+	# The fast-forward hook, set before the main scene and the game's code run: a game
+	# that steps its own simulation runs this many ticks per frame (see the skill).
+	# A "set_ticks_per_frame" step changes it during the run.
+	Engine.set_meta(TICKS_PER_FRAME_META, maxi(0, int(scenario.get("ticks_per_frame", 1))))
 
 	_runner = runner_script.new()
 	_runner.name = "GodotAgent"

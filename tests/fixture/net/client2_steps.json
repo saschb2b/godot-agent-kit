@@ -1,0 +1,7 @@
+[
+  {"wait_until": "scene.echoed", "timeout": 600},
+  {"assert": "'--join=127.0.0.1:' in ' '.join(OS.get_cmdline_user_args())", "msg": "{port} was filled in"},
+  {"eval": "{client}", "as": "client_index"},
+  {"assert": "client_index == 2", "msg": "{client} is this client's number"},
+  {"wait_until": "scene.tick >= 300", "timeout": 600}
+]

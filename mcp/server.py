@@ -55,7 +55,13 @@ Scenario JSON:
   "seed": 1, "timeout_frames": 3600, "fail_on_errors": true, "ignore_errors": ["regex"],
   "watch": {"hp": "first('player').hp"}, "watch_every": 0, "capture_every": 0,
   "observe_groups": ["player", "enemies"], "observe_props": ["hp", "grid_pos"],
-  "time_scale": 1 (8 = eight times the game time per frame, for long simulations),
+  "time_scale": 1 (8 = eight times the game time per frame for node-based games; it stretches
+                   each physics tick, so a game with its own fixed-step simulation uses:)
+  "ticks_per_frame": 1 (the kit sets Engine.set_meta("godot_agent_ticks_per_frame", N) before the
+                   scene loads; the game runs that many simulation ticks per frame:
+                   for i in int(Engine.get_meta("godot_agent_ticks_per_frame", 1)): sim.step()),
+  "max_fps": 0 (hold frames to N per wall-clock second, delta unchanged),
+  "deterministic": true (false: determinism=True runs it once, uncompared),
   "steps": [ ...one key per step... ]
 }
 Steps:
@@ -74,6 +80,7 @@ Steps:
   {"observe": "label"}                            state only: groups, props, watches, UI text
   {"scene": "res://other.tscn"}  {"log": "text"}
   {"repeat": 10, "steps": [...], "until": "expr"}
+  {"set_ticks_per_frame": 8}                      change the fast-forward hook mid-run (0 holds it)
 Expressions are Godot Expression syntax. Inputs: every autoload by name, engine singletons
 (ResourceLoader, Input, Time, ...), scene (current scene), frame, vars, stored variables.
 Helpers: resource(path), node(path), first(group), group(name), count(group),
@@ -81,6 +88,21 @@ has(obj, prop), set_prop(obj, prop, v), text(node_or_path), visible_text(), scre
 pressed(action), scene_path(), paused(), screen_pos(node_or_vec3), world_at(x, y, height),
 camera(). Expressions cannot hold lambdas; put loops in a helper script and call it, e.g.
 {"eval": "resource('res://tests/bot.gd').new()", "as": "bot"} then {"eval": "bot.step(scene)"}.
+
+Several processes (a server plus headless Godot clients of the project, merged into one result):
+  "topology": {
+    "server": {"cmd": ["{python}", "server/main.py", "--port", "0"], "cwd": ".", "env": {},
+               "ready": "listening.*port\\D*(?P<port>\\d+)"},   regex on its output; group port -> {port}
+    "clients": [{"args": ["--", "--join=127.0.0.1:{port}"]},        engine options, --, the game's args
+                {"args": [...], "scenario": "client2_steps.json"}], own scenario or steps file (or "steps")
+    "timeout": 180,   one global limit in seconds; every process (and its children) is then stopped
+    "max_fps": 60     clients are paced to wall-clock time (0: as fast as possible)
+  },
+  "compare_hashes": true   clients print "HASH <tick> <hex>" to stdout; every tick two or more hashed
+                           must agree, else the first differing tick is reported
+Placeholders in the server command and client args and steps: {port} {client} {clients} {out}
+{project} {python}. Clients run headless (no captures). determinism=True skips a topology unless it
+sets "deterministic": true; then both runs' clients and hash streams are compared.
 """
 
 mcp = FastMCP("godot-agent", instructions=INSTRUCTIONS)
@@ -145,12 +167,18 @@ def godot_scenario(project: str, paths: list[str] | None = None, scenario: dict 
 
 
 @mcp.tool()
-def godot_check(project: str, resources: bool = False, lint: bool = False) -> str:
+def godot_check(project: str, resources: bool = False, lint: bool = False,
+                sim_lint: list[str] | None = None) -> str:
     """Load every script in the project (resources=True: every .tscn/.tres too) in one headless
     process and list parse errors and broken references with res:// file:line. Refreshes a stale
     class cache first, which fixes 'Could not find type' errors for class_name scripts created
-    outside the editor. lint=True adds gdlint style issues."""
-    return _guard(lambda: format_check(check_project(project, resources=resources, lint=lint)))
+    outside the editor. lint=True adds gdlint style issues. sim_lint=["scripts/sim"] also fails on
+    tokens that break a lockstep simulation's determinism in those folders: floats and float
+    literals, trig and other transcendental functions, lerp, engine RNGs, float vector and transform
+    types, the scene tree, Time./OS.get_ticks/delta/time_scale, hash(), Node types. Strings and
+    comments are skipped; '# sim-lint: allow <token> <reason>' excuses one line."""
+    return _guard(lambda: format_check(check_project(project, resources=resources, lint=lint,
+                                                     sim_lint=sim_lint)))
 
 
 @mcp.tool()

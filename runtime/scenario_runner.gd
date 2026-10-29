@@ -25,7 +25,8 @@ const STEP_KINDS := [
 	"capture",
 	"observe",
 	"log",
-	"repeat"
+	"repeat",
+	"set_ticks_per_frame"
 ]
 ## Properties reported for observed nodes when the scenario names none.
 const DEFAULT_PROPS := ["grid_pos", "hp", "max_hp", "health", "state", "ai_state", "velocity"]
@@ -44,6 +45,8 @@ const TELEMETRY_COLUMNS := [
 ]
 const MAX_STEP_LOG := 400
 const RESULT_MARKER := "[godot-agent] result written"
+## The fast-forward hook a game reads each frame (boot.gd sets it from "ticks_per_frame").
+const TICKS_PER_FRAME_META := &"godot_agent_ticks_per_frame"
 
 var _tree: SceneTree
 var _scenario: Dictionary
@@ -57,6 +60,8 @@ var _headless := false
 
 var _frame := 0
 var _timeout_frames := 3600
+var _max_fps := 0
+var _pace_base_usec := 0
 var _done := false
 var _start_ms := 0
 var _last_frame_usec := 0
@@ -83,6 +88,7 @@ func setup(
 	_helpers = load(base_dir.path_join("helpers.gd")).new(tree)
 	_overlay = load(base_dir.path_join("overlay.gd")).new()
 	_timeout_frames = int(scenario.get("timeout_frames", 3600))
+	_max_fps = maxi(0, int(scenario.get("max_fps", 0)))
 	_headless = DisplayServer.get_name() == "headless"
 	if _headless:
 		_match_rendered_viewport()
@@ -107,6 +113,7 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(_overlay)
 	_start_ms = Time.get_ticks_msec()
+	_pace_base_usec = Time.get_ticks_usec()
 	_run()
 
 
@@ -114,6 +121,8 @@ func _process(_delta: float) -> void:
 	if _done:
 		return
 	_frame += 1
+	if _max_fps > 0:
+		_pace()
 	_sample_telemetry()
 	var capture_every := int(_scenario.get("capture_every", 0))
 	if capture_every > 0 and _frame % capture_every == 0:
@@ -126,12 +135,25 @@ func _process(_delta: float) -> void:
 		_finish("timeout: scenario exceeded %d frames" % _timeout_frames)
 
 
+## "max_fps": holds frames to wall-clock time (a client of a real server) while --fixed-fps
+## keeps every frame's delta the same. --max-fps does nothing under --fixed-fps.
+func _pace() -> void:
+	var now := Time.get_ticks_usec()
+	var due := _pace_base_usec + _frame * 1000000 / _max_fps
+	if now < due:
+		OS.delay_usec(due - now)
+	elif now - due > 250000:
+		# Far behind after a stall: start counting again instead of racing to catch up.
+		_pace_base_usec = now - _frame * 1000000 / _max_fps
+
+
 # ── Flow ──
 
 
 func _run() -> void:
-	# Game time per frame: 4 runs four times as many physics ticks per frame, so long
-	# simulations finish sooner (up to Engine.max_physics_steps_per_frame, raised to fit).
+	# Game time per frame. Under --fixed-fps (every run but --visible) the engine still runs
+	# one physics tick per frame and time_scale lengthens each tick's delta instead, so a
+	# game with its own fixed-step simulation should fast-forward with ticks_per_frame.
 	var time_scale := float(_scenario.get("time_scale", 1.0))
 	if time_scale != 1.0:
 		Engine.time_scale = time_scale
@@ -207,6 +229,8 @@ func _exec(step: Dictionary) -> void:
 			_observations.append(_observe(str(step["observe"])))
 		"log":
 			print("[godot-agent] ", step["log"])
+		"set_ticks_per_frame":
+			Engine.set_meta(TICKS_PER_FRAME_META, maxi(0, int(step["set_ticks_per_frame"])))
 		"repeat":
 			for n in int(step["repeat"]):
 				if _done:

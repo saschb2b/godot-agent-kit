@@ -9,6 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from . import simlint
 from .env import RUNTIME_DIR, find_godot, refresh_class_cache, resolve_project
 from .runner import parse_log
 
@@ -24,7 +25,7 @@ def _location(entry: dict) -> tuple[str, int]:
 
 def check_project(project: str | os.PathLike, resources: bool = False, lint: bool = False,
                   include_addons: bool = False, refresh: bool = True, timeout: int = 600,
-                  only: list[str] | None = None) -> dict:
+                  only: list[str] | None = None, sim_lint: list[str] | None = None) -> dict:
     godot = find_godot()
     project_path = resolve_project(project)
     notes = []
@@ -67,6 +68,9 @@ def check_project(project: str | os.PathLike, resources: bool = False, lint: boo
     }
     if lint:
         result["lint"] = _lint(project_path, include_addons)
+    if sim_lint:
+        result["sim_lint"] = simlint.lint_paths(project_path, sim_lint)
+        result["ok"] = result["ok"] and not result["sim_lint"]["problems"]
     return result
 
 
@@ -106,4 +110,6 @@ def format_check(result: dict) -> str:
     elif lint is not None:
         lines.append(f"  lint: {len(lint)} issues")
         lines += [f"    {i['file']}:{i['line']}  {i['message']}" for i in lint[:30]]
+    if result.get("sim_lint"):
+        lines += simlint.format_lint(result["sim_lint"])
     return "\n".join(lines)

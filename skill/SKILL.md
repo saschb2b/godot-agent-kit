@@ -1,6 +1,6 @@
 ---
 name: godot-agent
-description: Verify Godot 4 game changes with evidence. Use when working in any Godot project (a folder with project.godot) to check scripts compile, boot a scene and look at it, test gameplay with deterministic input scenarios (2D or 3D), inspect engine errors and performance, look up the exact Godot API for the installed version, or check, conform, import and generate game assets (sprites, palettes, Aseprite animations, low-poly 3D models, UI icons rendered from models, sound effects) against the project's style. Triggers include "does it work", "test this", "take a screenshot", "why does the scene crash", "write a test", "check the Godot API for X", "add a sprite/sound", "does this art fit the style", and any GDScript or asset change that should be verified before calling it done.
+description: Verify Godot 4 game changes with evidence. Use when working in any Godot project (a folder with project.godot) to check scripts compile, boot a scene and look at it, test gameplay with deterministic input scenarios (2D or 3D), fast-forward a fixed-step simulation tick-exactly, lint lockstep simulation code for non-determinism, run a server plus several headless clients and compare their state hashes, inspect engine errors and performance, look up the exact Godot API for the installed version, or check, conform, import and generate game assets (sprites, palettes, Aseprite animations, low-poly 3D models, UI icons rendered from models, sound effects) against the project's style. Triggers include "does it work", "test this", "take a screenshot", "why does the scene crash", "write a test", "check the Godot API for X", "add a sprite/sound", "does this art fit the style", and any GDScript or asset change that should be verified before calling it done.
 ---
 
 # godot-agent
@@ -21,7 +21,8 @@ at, or a clean check. Report failures with the tool output.
 1. **Look up APIs instead of recalling them.** Godot 3 and 4.x APIs differ in ways that compile
    and then break. `godot-agent api search tween property`, `godot-agent api show Tween.tween_property`.
    Deprecated members are marked `[DEPRECATED: ...]`.
-2. **After editing scripts:** `godot-agent check <project>` (add `--resources` after editing scenes).
+2. **After editing scripts:** `godot-agent check <project>` (add `--resources` after editing scenes,
+   `--sim-lint scripts/sim` for a lockstep simulation folder, see below).
    It also refreshes a stale class cache, the cause of "Could not find type X" for `class_name`
    scripts created outside the editor.
 3. **See it:** `godot-agent run <project> --scene res://x.tscn --frames 120 --capture-at 1,60,120 --overlay`.
@@ -53,7 +54,12 @@ at, or a clean check. Report failures with the tool output.
 Top-level keys: `scene` (default main scene), `seed`, `timeout_frames` (3600), `fail_on_errors`
 (true: any engine error fails the run), `ignore_errors` (regex list), `watch` (name → expression),
 `watch_every` (frames, writes watches.csv), `capture_every`, `observe_groups`, `observe_props`,
-`time_scale` (game seconds per real second; 8 plays a 5-minute match in under 3000 frames).
+`time_scale` (game time per frame for node-based games: 8 makes each frame 8/60 s of game time by
+stretching its one physics tick, which the run notes; games that step their own simulation
+fast-forward with `ticks_per_frame` instead), `ticks_per_frame` (1; handed to the game's fast-forward hook, see Lockstep and
+networked games), `max_fps` (0; hold frames to this many per wall-clock second without changing
+their fixed delta, for runs that talk to something real), `deterministic` (false: `--determinism`
+runs it once and does not compare), `compare_hashes` and `topology` (several processes, see below).
 
 | Step | Meaning |
 |---|---|
@@ -73,6 +79,7 @@ Top-level keys: `scene` (default main scene), `seed`, `timeout_frames` (3600), `
 | `{"observe": "label"}` | state only: groups, props, watches, visible UI text |
 | `{"scene": "res://x.tscn"}` | change scene and wait until ready |
 | `{"repeat": 10, "steps": [...], "until": "expr"}` | loops, e.g. walk until a wall |
+| `{"set_ticks_per_frame": 8}` | change the fast-forward hook mid-run (0 holds a simulation that reads it) |
 
 Expressions use Godot `Expression` syntax. Inputs: every autoload by name (`GameState.money`),
 engine singletons (`ResourceLoader`, `Input`, `Time`, ...), `scene` (current scene root), `frame`,
@@ -97,11 +104,92 @@ engine singletons (`ResourceLoader`, `Input`, `Time`, ...), `scene` (current sce
   `{"eval": "resource('res://tests/bot.gd').new()", "as": "bot"}`, then
   `{"repeat": 2000, "steps": [{"eval": "bot.step(scene)"}, {"wait": 15}], "until": "Game.state >= 2"}`.
   A scripted player that must win, plus an idle one that must lose, pins game balance.
-- Long simulations: run them `--headless` with `time_scale`; a full match then takes under a second.
+- Long simulations: run them `--headless` with `ticks_per_frame` (games that step their own
+  simulation) or `time_scale` (node-based games); a full match then takes under a second.
   Rendered runs use a software renderer (llvmpipe) and manage roughly 5 to 10 frames per second in
   3D, so keep captures to short, set-up moments (state set through `eval`/`set`, not played to).
 - Headless runs keep no renderer data: `MultiMesh.get_instance_transform` and similar read back
   defaults. Assert on game state the game keeps itself.
+
+## Lockstep and networked games
+
+**Fast-forward hook.** Before the main scene loads the kit sets
+`Engine.set_meta("godot_agent_ticks_per_frame", N)` from the scenario's `ticks_per_frame` (default 1);
+a `set_ticks_per_frame` step changes it. A game with a fixed-step simulation reads it every frame
+and runs that many ticks, so a test is tick-exact at any speed (`time_scale` is not: under the
+fixed timestep it stretches each tick instead of adding ticks). Outside the kit the meta is absent
+and the default 1 applies:
+
+```gdscript
+func _physics_process(_delta: float) -> void:
+	for i in int(Engine.get_meta("godot_agent_ticks_per_frame", 1)):
+		sim.step()
+```
+
+**Determinism lint.** `godot-agent check <project> --sim-lint scripts/sim` (repeatable; MCP
+`godot_check(sim_lint=[...])`) fails on tokens that make a simulation differ between machines or
+between native and web builds, in every `.gd` under the folder: `float` and float literals,
+`PI`/`TAU`/`INF`/`NAN`, float-only functions (`absf`, `fmod`, `snappedf`, ...), `sin` `cos` `tan`
+`atan2` `sqrt` `pow` `exp` `log` and their kin, `lerp*`, `randf*` `randi*` `randomize`
+`RandomNumberGenerator` `shuffle` `pick_random`, `Vector2` `Vector3` `Vector4` `Quaternion` `Basis`
+`Transform*` `Rect2` `AABB` `Plane` `Projection` (the integer `Vector2i`/`Vector3i` pass),
+`look_at`, `get_tree` `SceneTree` `get_nodes_in_group`, `Time.` `OS.get_ticks*` `delta`
+`time_scale`, `hash(` (use `HashingContext`) and every Node type (`node-type`). Strings and comments
+are skipped. Excuse one line with a reason: `x := 0.5  # sim-lint: allow float-literal view only`
+(the rule name or the reported token; several separated by commas). An allow without a reason is
+itself reported.
+
+**Several processes.** A scenario with `topology` starts a server command, waits for a line of its
+output to match `ready`, then runs one headless Godot process of the project per client and
+merges their results:
+
+```json
+{
+  "name": "net_two_clients_converge",
+  "scene": "res://main.tscn",
+  "compare_hashes": true,
+  "topology": {
+    "server": {"cmd": ["{python}", "server/main.py", "--port", "0", "--dev-match", "classic:2"],
+               "cwd": ".", "ready": "listening.*port\\D*(?P<port>\\d+)"},
+    "clients": [
+      {"args": ["--", "--join=127.0.0.1:{port}", "--bot"]},
+      {"args": ["--", "--join=127.0.0.1:{port}", "--bot"], "scenario": "client2_steps.json"}
+    ],
+    "timeout": 120
+  },
+  "steps": [{"wait_until": "Game.state == 2", "timeout": 6000}]
+}
+```
+
+- `server`: `cmd` (list), `cwd` (relative to the project; default the project), `env` (object),
+  `ready` (regex searched in each line of its stdout and stderr; a named group `port` becomes
+  `{port}`). Python servers run with `PYTHONUNBUFFERED=1`. A server that exits before `ready`, or
+  with a non-zero code while clients run, fails the scenario. `server` may be left out.
+- `clients`: one entry per process. `args` is what follows `godot --path <project>`: engine options,
+  then `--`, then the game's own arguments (all the game's own when there is no `--`); read them
+  with `OS.get_cmdline_user_args()`. A client runs the scenario's own keys and `steps`, overlaid by
+  its `scenario` file (a scenario object or a bare list of steps; relative to the scenario file,
+  then the project) and by any other keys in its entry (`steps`, `seed`, ...).
+- Placeholders in the server command and in every client argument and step: `{port}`, `{client}`
+  (1, 2, ...), `{clients}` (how many), `{out}` (this scenario's output folder), `{project}`,
+  `{python}` (the Python running the kit).
+- Clients always run headless with the fixed 60 fps timestep, paced to wall-clock time
+  (`topology.max_fps`, default 60; 0 runs them as fast as possible), so frame budgets mean about
+  seconds × 60 against a real server. Captures are skipped.
+- `topology.timeout` (seconds, default the run's `--timeout`) is one global limit: when it passes,
+  every process is stopped. Each process runs in its own session and is stopped with its whole
+  process group (`taskkill /T` on Windows), so a server's own children do not survive it either.
+- **Hashes:** a client prints `HASH <tick> <hex>` lines to stdout (for example every 60 ticks, the
+  first 8 bytes of a SHA-256 of the serialized state). With `"compare_hashes": true` every tick that
+  two or more clients hashed must carry one hash; the report names the first tick that does not,
+  each client's hash there and the last tick that agreed. When no tick was shared the comparison
+  fails too, so a client that stopped hashing cannot pass by silence.
+- Results: `<run>/<scenario>/server.log`, `client1/` (`godot.log`, `result.json`, `scenario.json`),
+  `client2/`, ...; the summary lists every process with its log.
+- `--determinism` does not compare topologies (real sockets are timing-dependent) unless the
+  scenario sets `"deterministic": true`; then the whole topology runs twice and every client's state
+  and hash stream are compared. `"deterministic": false` opts any other scenario out. In single
+  runs too, `--determinism` compares the HASH lines a game prints.
 
 ## Reading results
 

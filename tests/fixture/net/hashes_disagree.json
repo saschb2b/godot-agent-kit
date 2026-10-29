@@ -1,0 +1,20 @@
+{
+  "name": "hashes_disagree",
+  "description": "Must FAIL: client 2 flips its state from tick 120 on, so the hashes diverge at tick 120.",
+  "scene": "res://net/net_client.tscn",
+  "ticks_per_frame": 4,
+  "compare_hashes": true,
+  "topology": {
+    "server": {"cmd": ["{python}", "net/echo_server.py", "--port", "0"],
+               "ready": "listening on port (?P<port>\\d+)"},
+    "clients": [
+      {"args": ["--", "--join=127.0.0.1:{port}"]},
+      {"args": ["--", "--join=127.0.0.1:{port}", "--diverge-at=120"]}
+    ]
+  },
+  "steps": [
+    {"wait_until": "scene.echoed", "timeout": 600},
+    {"wait_until": "scene.tick >= 300", "timeout": 600},
+    {"assert": "scene.tick >= 300"}
+  ]
+}

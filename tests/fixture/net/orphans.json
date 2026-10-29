@@ -1,0 +1,18 @@
+{
+  "name": "orphans",
+  "description": "Must FAIL by timeout: clients that never finish and a server that forked a child are all stopped.",
+  "scene": "res://net/net_client.tscn",
+  "timeout_frames": 100000,
+  "topology": {
+    "timeout": 4,
+    "server": {"cmd": ["{python}", "net/echo_server.py", "--port", "0", "--spawn-orphan", "{out}/orphan.pid"],
+               "ready": "listening on port (?P<port>\\d+)"},
+    "clients": [
+      {"args": ["--", "--join=127.0.0.1:{port}"]},
+      {"args": ["--", "--join=127.0.0.1:{port}"]}
+    ]
+  },
+  "steps": [
+    {"wait_until": "false", "timeout": 100000}
+  ]
+}
