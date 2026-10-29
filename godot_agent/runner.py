@@ -29,6 +29,10 @@ AT_RE = re.compile(r"^\s+at: (.*)$")
 LOG_NOISE = ("wd.xic", "V-Sync", "MESA", "DRI3", "XInput", "xim server")
 KEEP_RUNS = 30
 RESULT_MARKER = "[godot-agent] result written"
+# A rendered run (llvmpipe under Xvfb) holds about 2 GB. Rendered runs from every
+# godot-agent process on the machine share a few slots, so parallel agents cannot
+# run it out of memory together. GODOT_AGENT_RENDER_SLOTS overrides the count.
+RENDER_GB = 2.0
 
 
 @dataclass
@@ -226,6 +230,51 @@ def run_job(godot: str, project: Path, job: Job, display: str | None, visible: b
     return record
 
 
+def _meminfo_gb(key: str) -> float | None:
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith(key + ":"):
+                return int(line.split()[1]) / 1048576
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def render_slots() -> int:
+    if os.environ.get("GODOT_AGENT_RENDER_SLOTS"):
+        return max(1, int(os.environ["GODOT_AGENT_RENDER_SLOTS"]))
+    total = _meminfo_gb("MemTotal")
+    return max(1, int(total // 6)) if total else 4
+
+
+@contextlib.contextmanager
+def render_slot():
+    """Holds one of the machine-wide render slots while a rendered run is alive.
+    Slot 0 always runs, so work never stalls; the others also wait for free memory."""
+    import fcntl
+    folder = CACHE_DIR / "render-slots"
+    folder.mkdir(parents=True, exist_ok=True)
+    while True:
+        for i in range(render_slots()):
+            handle = open(folder / f"slot-{i}.lock", "a")
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                handle.close()
+                continue
+            free = _meminfo_gb("MemAvailable")
+            if i == 0 or free is None or free >= RENDER_GB * 1.5:
+                try:
+                    yield i
+                finally:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+                    handle.close()
+                return
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            handle.close()
+        time.sleep(1.0)
+
+
 def run_scenarios(project: str | os.PathLike, paths: list[str] | None = None, inline: dict | None = None,
                   jobs: int = 4, determinism: bool = False, headless: bool = False, visible: bool = False,
                   out: str | None = None, timeout: int = 180, refresh: bool = True,
@@ -267,9 +316,13 @@ def run_scenarios(project: str | os.PathLike, paths: list[str] | None = None, in
     with display_ctx as display:
         if wants_render and not visible and display is None:
             notes.append("Xvfb not installed: ran headless, captures skipped (run install.sh)")
+        def run_one(job: Job) -> dict:
+            limit = render_slot() if job.render and display is not None else contextlib.nullcontext()
+            with limit:
+                return run_job(godot, project_path, job, display, visible, timeout, renderer)
+
         with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-            records = list(pool.map(lambda j: run_job(godot, project_path, j, display, visible, timeout, renderer),
-                                    job_list))
+            records = list(pool.map(run_one, job_list))
 
     if determinism:
         records = [_merge_determinism(records[i], records[i + 1]) for i in range(0, len(records), 2)]

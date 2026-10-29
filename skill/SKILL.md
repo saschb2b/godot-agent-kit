@@ -232,6 +232,9 @@ style's `background`), `max_baseline_jitter` (feet bobbing between frames), `imp
 ## Limits
 
 - Captures need rendering: Xvfb is used automatically; `--headless` skips captures but is faster.
+- A rendered run holds about 2 GB. Rendered runs from all godot-agent processes on the machine share
+  a few slots (one per 6 GB of RAM; `GODOT_AGENT_RENDER_SLOTS` overrides), so several agents rendering at
+  once queue instead of running the machine out of memory. Prefer `--headless` when no capture is needed.
   3D renders through Vulkan on llvmpipe; it works (Forward+ included) but is slow.
 - `--visible` opens a real window at real speed so a person can watch.
 - No image-generation model is wired in. Output from any generator goes through `asset conform`.
