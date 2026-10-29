@@ -133,9 +133,13 @@ between native and web builds, in every `.gd` under the folder: `float` and floa
 `atan2` `sqrt` `pow` `exp` `log` and their kin, `lerp*`, `randf*` `randi*` `randomize`
 `RandomNumberGenerator` `shuffle` `pick_random`, `Vector2` `Vector3` `Vector4` `Quaternion` `Basis`
 `Transform*` `Rect2` `AABB` `Plane` `Projection` (the integer `Vector2i`/`Vector3i` pass),
-`look_at`, `get_tree` `SceneTree` `get_nodes_in_group`, `Time.` `OS.get_ticks*` `delta`
-`time_scale`, `hash(` (use `HashingContext`) and every Node type (`node-type`). Strings and comments
-are skipped. Excuse one line with a reason: `x := 0.5  # sim-lint: allow float-literal view only`
+`look_at`, `get_tree` `SceneTree` `get_nodes_in_group`, `Time.` `OS.` `Engine.` `delta`
+`time_scale`, `hash(` (use `HashingContext`), every Node type (`node-type`), float rounding (`ceil`
+`floor` `round` `snapped` and their `i` forms), `.to_float()`, `.length()` (a vector's is a float),
+`.keys()` `.values()`, `.sort()` (orders objects by address) and `sort_custom` (unstable; say the
+tie-break in an allow), `get_instance_id`, `await`, `call_deferred`, `seed(`, and `dict-iteration`:
+`for k in d` where `d` is a name any file of the folder declares as a dictionary (`var d := {`,
+`d: Dictionary`) or a function typed `-> Dictionary`. Strings and comments are skipped. Excuse one line with a reason: `x := 0.5  # sim-lint: allow float-literal view only`
 (the rule name or the reported token; several separated by commas). An allow without a reason is
 itself reported.
 

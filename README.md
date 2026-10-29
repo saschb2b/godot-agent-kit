@@ -53,7 +53,8 @@ The scenario format and agent workflow are documented in [skill/SKILL.md](skill/
   runs that many ticks per frame, so fast-forwarding stays tick-exact. (`time_scale` under the fixed
   timestep stretches each tick instead; the run notes it.)
 - `godot-agent check <project> --sim-lint scripts/sim` fails on floats, trigonometry, engine RNGs,
-  float vectors, the scene tree, clocks, `hash()` and Node types in that folder. A line can allow a
+  float vectors, the scene tree, clocks, engine and OS state, float rounding, `hash()`, Node types,
+  address-ordered sorts, `await` and iterating a dictionary in that folder. A line can allow a
   token with a reason: `# sim-lint: allow <token> <reason>`.
 - `"topology"` runs a server command and N headless Godot clients of the project: readiness from a
   regex on the server's output (its `port` group fills `{port}` in the clients' arguments), per-client

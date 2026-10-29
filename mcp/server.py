@@ -175,7 +175,8 @@ def godot_check(project: str, resources: bool = False, lint: bool = False,
     outside the editor. lint=True adds gdlint style issues. sim_lint=["scripts/sim"] also fails on
     tokens that break a lockstep simulation's determinism in those folders: floats and float
     literals, trig and other transcendental functions, lerp, engine RNGs, float vector and transform
-    types, the scene tree, Time./OS.get_ticks/delta/time_scale, hash(), Node types. Strings and
+    types, the scene tree, Time./OS./Engine./delta/time_scale, float rounding, hash(), Node types,
+    .sort()/sort_custom/get_instance_id, await/call_deferred, and iterating a dictionary. Strings and
     comments are skipped; '# sim-lint: allow <token> <reason>' excuses one line."""
     return _guard(lambda: format_check(check_project(project, resources=resources, lint=lint,
                                                      sim_lint=sim_lint)))

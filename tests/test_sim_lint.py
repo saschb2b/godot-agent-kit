@@ -60,7 +60,22 @@ class SimLintTest(unittest.TestCase):
             "var a := get_tree()": ("get_tree", "get_tree"),
             "var a := tree.get_nodes_in_group(&\"creeps\")": ("get_nodes_in_group", "get_nodes_in_group"),
             "var a := Time.get_ticks_msec()": ("Time.", "Time."),
-            "var a := OS.get_ticks_usec()": ("OS.get_ticks", "OS.get_ticks_usec"),
+            "var a := OS.get_ticks_usec()": ("OS.", "OS."),
+            "var a := Engine.get_physics_frames()": ("Engine.", "Engine."),
+            "var a := ceil(7 / 2)": ("rounding", "ceil"),
+            "var a := floori(x)": ("rounding", "floori"),
+            "var a := snapped(x, 4)": ("rounding", "snapped"),
+            "var a := \"1.5\".to_float()": ("to_float", "to_float"),
+            "var a := Vector2i(3, 4).length()": ("length()", "length"),
+            "var a := table.keys()": ("keys()", "keys"),
+            "var a := table.values()": ("keys()", "values"),
+            "towers.sort()": ("sort()", "sort"),
+            "towers.sort_custom(func(x, y): return x.id < y.id)": ("sort_custom", "sort_custom"),
+            "var a := tower.get_instance_id()": ("get_instance_id", "get_instance_id"),
+            "await done": ("await", "await"),
+            "call_deferred(\"go\")": ("call_deferred", "call_deferred"),
+            "seed(4)": ("randomize", "seed"),
+            "var a := state.hash()": ("hash(", "hash"),
             "func step(delta: int) -> void:": ("delta", "delta"),
             "Engine.time_scale = 2": ("time_scale", "time_scale"),
             "var a := hash(state)": ("hash(", "hash"),
@@ -83,6 +98,10 @@ class SimLintTest(unittest.TestCase):
             "var integer := int(7) / 2 % 3",
             "func is_float_free() -> bool: return true",
             "var range_sq := range_mm * range_mm",
+            "var floor_mm := ceiling + rounds + length + keys",
+            "var n := ids.size() + name.length_mm + match_seed(4) + self.seed",
+            "var sorted_ids := sort_ids(ids)",
+            "for id in ids:",
         ])
         self.assertEqual(found(clean), [])
 
@@ -98,6 +117,40 @@ class SimLintTest(unittest.TestCase):
         ])
         # Only the call after the multi-line string counts, on the line it is on.
         self.assertEqual(found(source), [(6, "sqrt", "sqrt")])
+
+    def test_iterating_a_dictionary_of_the_folder(self):
+        content = "\n".join([
+            "const TOWERS := {\"arrow\": 1}",
+            "static func rules(mode: String) -> Dictionary:",
+            "\treturn {}",
+        ])
+        match = "\n".join([
+            "var table := {}",
+            "func step(ids: Array, costs: Dictionary) -> void:",
+            "\tfor key in table:",
+            "\tfor name in SimContent.TOWERS:",
+            "\tfor key in SimContent.rules(\"classic\"):",
+            "\tfor seat in costs:",
+            "\tfor id in ids:",
+            "\tfor i in range(4):",
+            "\tfor key in table:  # sim-lint: allow dict-iteration the table has one fixed entry",
+        ])
+        names = simlint.dictionary_names(content)
+        self.assertEqual(names, {"TOWERS", "rules"})
+        problems, excused = simlint.lint_source(match, names)
+        self.assertEqual([(p["line"], p["rule"], p["token"]) for p in problems],
+                         [(3, "dict-iteration", "table"), (4, "dict-iteration", "SimContent.TOWERS"),
+                          (5, "dict-iteration", "SimContent.rules"), (6, "dict-iteration", "costs")])
+        self.assertEqual(excused, 1)
+        # Through lint_paths, a dictionary one file declares is known in every other.
+        with tempfile.TemporaryDirectory() as tmp:
+            sim = Path(tmp) / "sim"
+            sim.mkdir()
+            (sim / "content.gd").write_text(content + "\n")
+            (sim / "match.gd").write_text("func f() -> void:\n\tfor name in SimContent.TOWERS:\n\t\tpass\n")
+            report = simlint.lint_paths(tmp, ["sim"])
+            self.assertEqual([(Path(p["file"]).name, p["line"], p["rule"]) for p in report["problems"]],
+                             [("match.gd", 2, "dict-iteration")])
 
     def test_allow_comment_needs_a_reason(self):
         source = "\n".join([

@@ -3,7 +3,9 @@
 A lockstep game runs the same simulation on every client and compares state hashes, so the
 simulation code must give bit-identical results on every CPU, OS and in the web build. This lint
 fails on tokens that break that: floats, transcendental functions, engine RNGs, float vector
-types, the scene tree, wall-clock time and frame deltas, Variant hashing and Node types.
+types, the scene tree, wall-clock time and frame deltas, engine and OS state, float rounding,
+Variant hashing, Node types, address-ordered sorts and instance ids, deferred work, and
+iterating a dictionary (any name the folder declares as one, or a function typed -> Dictionary).
 
 Strings and comments are not linted. A line may allow a token with a reason:
 
@@ -45,6 +47,15 @@ _RNG = "engine RNG; draw from the simulation's own seeded RNG, whose state is pa
 _VECTOR = "float vector or transform type; use ints, Vector2i or Vector3i"
 _TREE = "the simulation has no scene tree; keep entities in arrays ordered by id"
 _TIME = "wall-clock or frame time; the simulation counts ticks"
+_ORDER = "a dictionary's order is its insertion history; iterate an array of ids in a fixed order"
+_SYNC = "the simulation steps synchronously; deferred work runs on frame time"
+
+# A dictionary declared in code: `var d := {`, `var d: Dictionary`, a parameter `d: Dictionary`, or a
+# function typed `-> Dictionary`. Iterating one (`for k in d:`, `for k in content.rules(...):`) is the
+# dict-iteration rule.
+_DICT_DECL = re.compile(r"\b(?:var|const)\s+(\w+)\s*(?::?=\s*\{|:\s*Dictionary\b)|(\w+)\s*:\s*Dictionary\b"
+                        r"|\bfunc\s+(\w+)\s*\([^)]*\)\s*->\s*Dictionary\b")
+_FOR_IN = re.compile(r"\bfor\s+\w+(?:\s*:\s*\w+)?\s+in\s+([\w.]+)\s*[:(]")
 
 
 def _rules() -> list[Rule]:
@@ -66,7 +77,7 @@ def _rules() -> list[Rule]:
         Rule("lerp", re.compile(r"\b\w*lerp\w*\b"), "interpolation is float math; views interpolate, the simulation does not"),
         Rule("randf", re.compile(r"\brandf\w*\b"), _RNG),
         Rule("randi", re.compile(r"\brandi\w*\b"), _RNG),
-        Rule("randomize", re.compile(r"\brandomize\b|\bRandomNumberGenerator\b"), _RNG),
+        Rule("randomize", re.compile(r"\brandomize\b|\bRandomNumberGenerator\b|(?<![\w.])seed\s*\("), _RNG),
         Rule("shuffle", re.compile(r"\bshuffle\b"), _RNG),
         Rule("pick_random", re.compile(r"\bpick_random\b"), _RNG),
     ]
@@ -78,11 +89,26 @@ def _rules() -> list[Rule]:
         Rule("get_tree", re.compile(r"\bget_tree\b|\bSceneTree\b"), _TREE),
         Rule("get_nodes_in_group", re.compile(r"\bget_nodes_in_group\b|\bget_first_node_in_group\b"), _TREE),
         Rule("Time.", re.compile(r"\bTime\s*\."), _TIME),
-        Rule("OS.get_ticks", re.compile(r"\bOS\s*\.\s*get_ticks\w*"), _TIME),
+        Rule("OS.", re.compile(r"\bOS\s*\."), "the machine's clocks, environment and platform differ per client"),
+        Rule("Engine.", re.compile(r"\bEngine\s*\."),
+             "engine state (time scale, frame count, meta) is not part of the match; pass in what the rules need"),
         Rule("delta", re.compile(r"\bdelta\b"), _TIME),
         Rule("time_scale", re.compile(r"\btime_scale\b"), _TIME),
         Rule("hash(", re.compile(r"\bhash\s*\("),
              "Variant hashing is not specified to be stable; hash state with HashingContext"),
+        Rule("rounding", re.compile(_call("ceil|floor|round|ceili|floori|roundi|snapped|snappedi")),
+             "rounds a float; " + _FLOAT_TYPES),
+        Rule("to_float", re.compile(r"(?<=\.)to_float(?=\s*\()"), "float conversion; " + _FLOAT_TYPES),
+        Rule("length()", re.compile(r"(?<=\.)length(?=\s*\(\s*\))"),
+             "a vector's length is a float; compare squared integer distances"),
+        Rule("keys()", re.compile(r"(?<=\.)(?:keys|values)(?=\s*\()"), _ORDER),
+        Rule("sort()", re.compile(r"(?<=\.)sort(?=\s*\(\s*\))"),
+             "Array.sort orders objects by address; sort ints only and say so in an allow comment"),
+        Rule("sort_custom", re.compile(r"\bsort_custom\b"),
+             "the sort is not stable; break ties by id and say so in an allow comment"),
+        Rule("get_instance_id", re.compile(r"\bget_instance_id\b"), "instance ids differ between runs and machines"),
+        Rule("await", re.compile(r"\bawait\b"), _SYNC),
+        Rule("call_deferred", re.compile(r"\bcall_deferred\b|\bset_deferred\b"), _SYNC),
         Rule("node-type", re.compile(r"\b(?:" + "|".join(sorted(node_types(), key=len, reverse=True)) + r")\b"),
              "Node type; the simulation is RefCounted records with no nodes"),
     ]
@@ -167,11 +193,19 @@ def _allows(comment: str) -> tuple[set[str], list[str]]:
     return allowed, missing
 
 
-def lint_source(source: str) -> tuple[list[dict], int]:
-    """Problems in one file's source, and how many hits an allow comment excused."""
+def dictionary_names(source: str) -> set[str]:
+    """Names one file's code declares as dictionaries (see _DICT_DECL)."""
+    code = "\n".join(split_source(source)[0])
+    return {name for match in _DICT_DECL.finditer(code) for name in match.groups() if name}
+
+
+def lint_source(source: str, dictionaries: set[str] | frozenset[str] = frozenset()) -> tuple[list[dict], int]:
+    """Problems in one file's source, and how many hits an allow comment excused. `dictionaries` names
+    the dictionaries other files of the folder declare, so iterating one of theirs is caught too."""
     problems: list[dict] = []
     excused = 0
     code_lines, comment_lines = split_source(source)
+    known = set(dictionaries) | dictionary_names(source)
     source_lines = source.split("\n")
     for number, (code, comment) in enumerate(zip(code_lines, comment_lines), 1):
         allowed, missing = _allows(comment)
@@ -189,6 +223,13 @@ def lint_source(source: str) -> tuple[list[dict], int]:
                     continue
                 problems.append({"line": number, "column": match.start() + 1, "rule": rule.name, "token": text,
                                  "why": rule.why, "source": source_lines[number - 1].strip()})
+        loop = _FOR_IN.search(code)
+        if loop and (loop.group(1) in known or loop.group(1).rsplit(".", 1)[-1] in known):
+            if "dict-iteration" in allowed or loop.group(1) in allowed:
+                excused += 1
+            else:
+                problems.append({"line": number, "column": loop.start(1) + 1, "rule": "dict-iteration",
+                                 "token": loop.group(1), "why": _ORDER, "source": source_lines[number - 1].strip()})
     problems.sort(key=lambda p: (p["line"], p["column"]))
     return problems, excused
 
@@ -216,8 +257,10 @@ def lint_paths(project: str | os.PathLike, paths: list[str]) -> dict:
             problems.append({"file": raw, "line": 0, "column": 0, "rule": "path", "token": raw,
                              "why": "no such file or folder", "source": ""})
     excused = 0
-    for file in dict.fromkeys(files):
-        found, allowed = lint_source(file.read_text(encoding="utf-8", errors="replace"))
+    sources = {file: file.read_text(encoding="utf-8", errors="replace") for file in dict.fromkeys(files)}
+    dictionaries = set().union(*(dictionary_names(text) for text in sources.values()))
+    for file, text in sources.items():
+        found, allowed = lint_source(text, dictionaries)
         excused += allowed
         rel = os.path.relpath(file, project)
         problems += [{"file": rel, **p} for p in found]
