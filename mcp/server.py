@@ -274,6 +274,22 @@ def asset_icon(project: str, model: str, to: str, size: int = 64, pitch: float =
 
 
 @mcp.tool()
+def asset_blender(project: str, script: str, to: str, seed: int = 1, params: dict[str, str] | None = None,
+                  review: bool = True) -> list:
+    """Build a model with a Blender Python script, headless, and export it to `to` (.glb). The
+    script starts from an empty scene and uses the kit's helpers (`import gab`; see the skill):
+    smooth organic bodies (subdivide, displace_noise, smooth), vertex paint for the painted
+    material (paint), foliage cards (bough, card, tint) for alpha-cut needle/leaf textures,
+    emissive parts (glow), rigs and looping animations (armature, skin, animate). Front faces -Y in
+    Blender. Materials map to the project's by name; recipe recorded for asset_regen; returns
+    validation and turntable renders."""
+    def run() -> list:
+        result = pipeline.make_blender(project, script, to, seed=seed, params=params, review=review)
+        return [_format_result(result)] + ([_image(result["preview"], 1000)] if result.get("preview") else [])
+    return _asset_guard(run)
+
+
+@mcp.tool()
 def asset_texture(project: str, preset: str, to: str, size: int = 256, seed: int = 1,
                   colors: dict[str, str] | None = None) -> list:
     """Paint a seamless, hand-painted terrain texture: grass (blade strokes), meadow (with flowers),

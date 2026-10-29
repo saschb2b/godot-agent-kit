@@ -832,7 +832,8 @@ def analyze_model(path: Path) -> dict:
     """Triangles, bounds (with node transforms), materials and vertex colors (sRGB) of a glTF file."""
     gltf, buffers = _read_gltf(path)
     tris, colors, points = 0, set(), []
-    has_vertex_colors = True
+    # Surfaces without COLOR_0 (emissive eyes, textured parts) are skipped, not fatal.
+    has_vertex_colors = False
 
     def visit(index: int, parent: list[list[float]]) -> None:
         nonlocal tris, has_vertex_colors
@@ -847,10 +848,9 @@ def analyze_model(path: Path) -> dict:
                 tris += count // 3
                 points.extend(_apply(m, p) for p in positions)
                 if "COLOR_0" in prim["attributes"]:
+                    has_vertex_colors = True
                     for c in _accessor(gltf, buffers, prim["attributes"]["COLOR_0"]):
                         colors.add(tuple(round(_to_srgb(v) * 255) for v in c[:3]))
-                else:
-                    has_vertex_colors = False
         for child in node.get("children", []):
             visit(child, m)
 
@@ -868,6 +868,8 @@ def analyze_model(path: Path) -> dict:
         "max": [round(v, 3) for v in hi],
         "center_xz": [round((lo[0] + hi[0]) / 2, 3), round((lo[2] + hi[2]) / 2, 3)],
         "materials": len(gltf.get("materials", [])),
+        "material_names": [m.get("name", "") for m in gltf.get("materials", [])],
+        "animations": [a.get("name", "") for a in gltf.get("animations", [])],
         "vertex_colors": sorted(colors) if has_vertex_colors else None,
     }
 
@@ -905,11 +907,18 @@ def validate_model(project: Path, rel: str, rule: dict, style) -> dict:
         cx, cz = metrics["center_xz"]
         if max(abs(cx), abs(cz)) > max(tolerance, 0.15 * span):
             problems.append(f"footprint centred at x={cx}, z={cz}; expected near 0")
+    for name in rule.get("animations", []):
+        if name not in metrics["animations"]:
+            problems.append(f"no '{name}' animation (has {metrics['animations'] or 'none'})")
     if "max_materials" in rule and metrics["materials"] > rule["max_materials"]:
         problems.append(f"{metrics['materials']} materials, max {rule['max_materials']} (each is a draw call)")
     palette = style.palette(rule.get("palette")) if rule.get("palette") else None
     if palette:
         colors = metrics["vertex_colors"]
+        if colors is not None and any(n.startswith("foliage") for n in metrics["material_names"]):
+            # Foliage tints multiply a grey card; their colours are not paint.
+            notes.append("foliage tints not checked against the palette")
+            colors = None
         if colors is None:
             notes.append("no vertex colors; palette not checked")
         else:
@@ -949,7 +958,7 @@ def _run_model_script(project: Path, listing: dict, frames: Path, timeout: int) 
 
 
 def render_icons(project: Path, models: list[Path], out: Path, size: int = 64, pitch: float = 30.0,
-                 yaw: float = 35.0, material: str | None = None, frame: dict | None = None,
+                 yaw: float = 35.0, material: dict | None = None, frame: dict | None = None,
                  timeout: int = 300) -> list[Path]:
     """One 3/4-view PNG per model, rendered at 2x and downscaled for clean edges.
 
@@ -959,7 +968,7 @@ def render_icons(project: Path, models: list[Path], out: Path, size: int = 64, p
     from PIL import Image
 
     frames = out / "frames"
-    _run_model_script(project, {"icon": True, "size": size * 2, "pitch": pitch, "yaw": yaw, "material": material,
+    _run_model_script(project, {"icon": True, "size": size * 2, "pitch": pitch, "yaw": yaw, "materials": material or {},
                                 "models": [{"path": str(m), "label": m.stem} for m in models]}, frames, timeout)
     results = []
     for i, model in enumerate(models):
@@ -979,7 +988,7 @@ def render_icons(project: Path, models: list[Path], out: Path, size: int = 64, p
 
 
 def render_review(project: Path, items: list[dict], out: Path, background: str, size: int = 256,
-                  views: int = 4, pitch: float = 45.0, material: str | None = None, timeout: int = 300) -> Path:
+                  views: int = 4, pitch: float = 45.0, material: dict | None = None, timeout: int = 300) -> Path:
     """Turntable views per model plus a true-scale lineup, rendered by Godot, as one sheet.
 
     items: [{"path": rel or absolute, "ok": bool, "summary": "..."}]. Rendering needs a
@@ -991,7 +1000,7 @@ def render_review(project: Path, items: list[dict], out: Path, background: str, 
     models = [{"path": str((project / it["path"]) if not Path(it["path"]).is_absolute() else it["path"]),
                "label": Path(it["path"]).stem} for it in items]
     _run_model_script(project, {"models": models, "size": size, "views": views, "pitch": pitch,
-                                "background": background, "material": material}, frames, timeout)
+                                "background": background, "materials": material or {}}, frames, timeout)
 
     font = ImageFont.load_default()
     label_h, pad = 18, 6

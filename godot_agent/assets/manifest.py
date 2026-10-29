@@ -17,11 +17,20 @@ def load(project: Path) -> dict:
 
 
 def record(project: Path, rel: str, entry: dict) -> None:
-    manifest = load(project)
-    entry = {**entry, "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
-    manifest["assets"][rel] = entry
-    manifest["assets"] = dict(sorted(manifest["assets"].items()))
-    (project / MANIFEST_FILE).write_text(json.dumps(manifest, indent=2) + "\n")
+    """Adds or replaces one entry. Locked and written atomically, so several builds
+    running at once (parallel agents) never lose each other's entries."""
+    import fcntl
+    import os
+    lock_path = project / f".{MANIFEST_FILE}.lock"
+    with open(lock_path, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        manifest = load(project)
+        entry = {**entry, "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        manifest["assets"][rel] = entry
+        manifest["assets"] = dict(sorted(manifest["assets"].items()))
+        tmp = project / f".{MANIFEST_FILE}.tmp{os.getpid()}"
+        tmp.write_text(json.dumps(manifest, indent=2) + "\n")
+        os.replace(tmp, project / MANIFEST_FILE)
 
 
 def get(project: Path, rel: str) -> dict | None:

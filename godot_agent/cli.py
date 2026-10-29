@@ -43,6 +43,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     rows.append(("Xvfb (captures without a window)", bool(shutil.which("Xvfb")), shutil.which("Xvfb") or "sudo apt install xvfb"))
     rows.append(("ffmpeg (audio checks)", bool(shutil.which("ffmpeg")), shutil.which("ffmpeg") or "sudo apt install ffmpeg"))
     rows.append(("aseprite (sprite import)", bool(shutil.which("aseprite")), shutil.which("aseprite") or "missing"))
+    rows.append(("blender (asset blender)", bool(shutil.which("blender")), shutil.which("blender") or "sudo snap install blender --classic"))
     rows.append(("Pillow (contact sheets)", sheet.Image is not None, "ok" if sheet.Image else "pip install pillow"))
     rows.append(("gdlint / gdformat", bool(shutil.which("gdlint")), shutil.which("gdlint") or "uv tool install gdtoolkit"))
     rows.append(("git (API docs fetch)", bool(shutil.which("git")), shutil.which("git") or "missing"))
@@ -186,10 +187,19 @@ def cmd_asset(args: argparse.Namespace) -> int:
         result = pipeline.make_icon(args.project, args.model, args.to, size=args.size, pitch=args.pitch, yaw=args.yaw,
                                     frame=frame, style_path=args.style, import_into_godot=not args.no_import)
         return emit(result, _format_result(result), result["ok"])
+    if args.action == "blender":
+        params = dict(p.split("=", 1) for p in args.param or [])
+        result = pipeline.make_blender(args.project, args.script, args.to, seed=args.seed, params=params,
+                                       style_path=args.style, review=args.review, import_into_godot=not args.no_import)
+        text = _format_result(result)
+        if result.get("preview"):
+            text += f"\n  review: {result['preview']}"
+        return emit(result, text, result["ok"])
     if args.action == "texture":
         from .assets import textures
         if args.preset == "list":
-            print("presets: " + ", ".join(textures.PRESETS))
+            print("presets: " + ", ".join(textures.PRESETS) + "\ncards (with a foliage material): "
+                  + ", ".join(textures.CARDS))
             return 0
         if not args.to:
             raise GodotAgentError("--to res://textures/name.png is required")
@@ -360,8 +370,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="paint a backdrop and bevelled border in this trim (command-card style)")
     p.add_argument("--frame-background", default="#2b3d5c", help="backdrop colour for --frame")
     p.add_argument("--no-import", action="store_true")
-    p = asset_parser("texture", "paint a seamless terrain texture with mipmapped import ('list' shows presets)")
-    p.add_argument("preset", help="grass, meadow, path, dirt, sand, mud, rock, cobble, or list")
+    p = asset_parser("blender", "build a .glb with a Blender Python script (helpers: godot_agent/blender/gab.py)")
+    p.add_argument("script", help="build script, e.g. art_src/blender/pine.py")
+    p.add_argument("--to", required=True, help="destination .glb, e.g. res://models/vegetation/pine.glb")
+    p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--param", action="append", metavar="NAME=VALUE", help="passed to the script as gab.params")
+    p.add_argument("--review", action="store_true", help="render turntable views and a true-scale lineup")
+    p.add_argument("--no-import", action="store_true")
+    p = asset_parser("texture", "paint a seamless terrain texture or a foliage card ('list' shows presets)")
+    p.add_argument("preset", help="grass, meadow, path, dirt, sand, mud, rock, cobble, foliage_pine, foliage_leaves, "
+                                  "foliage_grass, foliage_fern, or list")
     p.add_argument("--to", help="destination .png, e.g. res://textures/grass.png")
     p.add_argument("--size", type=int, default=256)
     p.add_argument("--seed", type=int, default=1)

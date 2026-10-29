@@ -125,6 +125,8 @@ assets it already has. The draft records the status quo, so review and tighten i
 | Pixel art you draw | aseprite MCP: `load_palette` with the project's `.gpl`, draw, `render_sprite` to look, save; then `asset aseprite <project> x.aseprite --to res://art/x` (`asset_aseprite_import`) gives a sheet plus a SpriteFrames `.tres`, one animation per tag |
 | Low-poly 3D models | `asset mesh <project> <preset or recipe.json> --to res://models/x.glb --seed 3 --variants 4 [--color leaf=#d08a2e] --review` (`asset_mesh`); presets: tree_round, tree_pine, bush, rock, grass_tuft, flower, mushroom, stump, pumpkin, crystal |
 | UI icons from models | `asset icon <project> res://models/x.glb --to res://ui/icons/x.png --size 64 [--frame gold --frame-background "#2b3d5c"]` (`asset_icon`): 3/4 view, transparent or as a framed command button |
+| Organic or detailed 3D models (creatures with walk cycles, trees with card foliage) | `asset blender <project> art_src/blender/x.py --to res://models/x.glb --seed 3 [--param leaf=#3f7a2e] --review` (`asset_blender`): runs your Blender build script headless, see Blender models below |
+| Foliage cards | `asset texture <project> foliage_pine --to res://textures/foliage_pine.png` (`asset_texture`): grey alpha-cut card (presets foliage_pine, foliage_leaves, foliage_grass, foliage_fern) plus `materials/foliage_pine.tres` over the kit's swaying `foliage.gdshader`; models tint it by vertex colour |
 | Painted terrain textures | `asset texture <project> grass --to res://textures/grass.png [--size 256 --color mid=#4f8a32]` (`asset_texture`): seamless, mipmapped; presets grass, meadow, path, dirt, sand, mud, rock, cobble. Sample with world-space UVs and blend by masks in a terrain shader; mix two scales to hide the repeat |
 | Painted UI frames | `asset ui <project> panel --to res://ui/frames/console --size 256x192 --fill stone --trim gold` (`asset_ui`): nine-slice PNG plus StyleBoxTexture `.tres`; presets panel, bar, tooltip, button (four state files), slot, frame; fills stone, wood, leather, slate; trims gold, iron, bronze, wood |
 | Sound effects | `asset sfx <project> <preset> --to res://sfx/x.wav --seed 3 --variants 4` (`asset_sfx`); presets: pickup, laser, explosion, powerup, hit, jump, blip, door, step, magic, death, arrow, cannon, build, horn |
@@ -132,6 +134,45 @@ assets it already has. The draft records the status quo, so review and tighten i
 | Rebuild exactly | `asset regen <project> <path>` (`asset_regen`), from the recipe in `asset_manifest.json` |
 
 Then look at new art in context: `godot-agent run` with a capture of the scene that uses it.
+
+### Blender models
+
+Recipes stop at faceted primitives. For smooth creatures, rigs, walk cycles and trees with
+layered card foliage, write a Blender build script (keep it in the game, e.g.
+`art_src/blender/pine.py`) and build it with `asset blender`. The script is plain `bpy` that
+starts from an empty scene; the runner imports the kit's helper module as `gab`, sets `gab.seed`,
+`gab.params` (the `--param` values) and `gab.rng`, runs the script and exports every mesh and
+armature. Read `godot_agent/blender/gab.py`: its docstrings are the API. In short:
+
+- Conventions: Z up, the model's front faces -Y (it becomes +Z in Godot), 1 unit = 1 tile, pivot
+  (feet, trunk base) at the origin. Draw every random choice from `gab.rng` so builds repeat.
+- Shapes: any bpy/bmesh, plus `mesh_object`, `primitive`, `subdivide`, `displace_noise` (seeded),
+  `smooth` (by angle), `flat`, `decimate`, `join`, `triangles`.
+- Look: `assign(obj, painted())` then `paint(obj, color, top=..., pattern="bark")` writes the vertex
+  colours and pattern the painted shader reads (the same patterns as recipes), with a gradient from
+  base to top, per-face variation and ground AO; `uv_box` / `uv_cylinder` give UVs in metres.
+  `glow(name, color, strength)` is an emissive material for eyes, faces and lanterns.
+- Foliage: `card()` (upright) and `bough()` (a drooping branch growing along +X) with
+  `foliage("foliage_pine")` and `tint(obj, dark, top=light)`: the grey card times the tint, so
+  tint dark at the base and bright at the tips. Several overlapping cards read as one dense mass.
+- Motion: `armature(name, bones)`, `skin(mesh, arm, groups)` (rigid vertex groups, or automatic
+  weights), `animate(arm, "walk", frames, keys)` (a looping action; its name is the animation's).
+  In Godot the model's AnimationPlayer has it: loop it and, for repeatable runs, set the player's
+  callback mode to manual and `advance(delta)` from `_physics_process`.
+
+The command maps glTF materials to the project's by name (`painted` and `foliage_*` to their
+`.tres`, others kept), records script, seed and params for `asset regen`, validates against the
+style (`animations: ["walk"]` in a model rule requires those actions) and, with `--review`, renders
+the turntable and lineup with the game's real materials. Pass `--no-import` when several builds run
+at once and import once afterwards. A model built from several Blender objects imports as several
+MeshInstance3D nodes: merge them into one mesh (baking each node's transform) before using it in a
+MultiMesh.
+
+What reads as Reforged-style rather than cheap: many small layered forms instead of a few blobs,
+smooth shading on organic shapes, a colour gradient on everything (cool dark bases and undersides,
+warm lit tips), a pattern on every large surface, alpha-cut cards for needles and leaves, a little
+asymmetry, and an emissive accent that reads in shade. A tree of 2,000 to 2,500 triangles and a
+creep of 3,000 stay cheap even in a dense forest and in the browser.
 
 ### 3D model recipes
 

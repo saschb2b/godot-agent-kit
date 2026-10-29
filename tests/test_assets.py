@@ -51,6 +51,20 @@ func _initialize():
     quit()
 """
 
+# A Blender build script: a painted post, a grass card and a two-bone rig with a walk.
+BLENDER_SCRIPT = """
+import gab
+post = gab.primitive("cylinder", vertices=8, radius=0.1, depth=0.6, location=(0, 0, 0.3))
+gab.assign(post, gab.painted())
+gab.paint(post, "#ff004d", pattern="bark")
+gab.uv_cylinder(post)
+tuft = gab.assign(gab.card(0.4, 0.3, at=(0.2, 0, 0)), gab.foliage("foliage_grass"))
+gab.tint(tuft, "#008751", top="#00e436")
+arm = gab.armature("rig", [("root", (0, 0, 0), (0, 0, 0.3), None), ("top", (0, 0, 0.3), (0, 0, 0.6), "root")])
+gab.skin(post, arm, {"root": range(0, 16)})
+gab.animate(arm, "walk", 12, {"top": [(0, (0, 0, 0)), (6, (10, 0, 0))]})
+"""
+
 # Builds a 4-frame, two-tag sprite: a red pixel walking right, idle and pingpong walk.
 ASEPRITE_SCRIPT = """
 local spr = Sprite(16, 16, ColorMode.RGB)
@@ -229,6 +243,37 @@ class AssetPipelineTest(unittest.TestCase):
             # Across the wrap the image changes no more than between any two neighbouring columns.
             inner = sum(column_gap(x, x + 1) for x in range(size - 1)) / (size - 1)
             self.assertLess(column_gap(size - 1, 0), inner * 1.6)
+
+    def test_foliage_cards_are_alpha_cut_with_a_card_material(self):
+        result = pipeline.make_texture(str(self.project), "foliage_grass", "res://textures/foliage_grass.png",
+                                       size=64, import_into_godot=False)
+        self.assertTrue(result["ok"], result["problems"])
+        with Image.open(self.project / "textures" / "foliage_grass.png") as img:
+            alphas = img.convert("RGBA").getchannel("A").tobytes()
+        # Drawn with an alpha cut at 0.42 in mind: clear around the plant, solid where it stands.
+        self.assertGreater(alphas.count(0), len(alphas) // 5, "the card is mostly cut out")
+        self.assertGreater(sum(a > 107 for a in alphas), len(alphas) // 20, "and has solid blades")
+        tres = (self.project / "materials" / "foliage_grass.tres").read_text()
+        self.assertIn("res://materials/foliage.gdshader", tres)
+        self.assertIn("res://textures/foliage_grass.png", tres)
+
+    @unittest.skipUnless(shutil.which("blender"), "blender not installed")
+    def test_blender_model_keeps_rig_animation_and_material_names(self):
+        pipeline.make_texture(str(self.project), "foliage_grass", "res://textures/foliage_grass.png", size=64,
+                              import_into_godot=False)
+        script = self.tmp / "post.py"
+        script.write_text(BLENDER_SCRIPT)
+        result = pipeline.make_blender(str(self.project), str(script), "res://models/post.glb", seed=2)
+        self.assertTrue(result["ok"], result["problems"])
+        from godot_agent.assets import meshes
+        info = meshes.analyze_model(self.project / "models" / "post.glb")
+        self.assertEqual(info["animations"], ["walk"])
+        self.assertEqual(sorted(info["material_names"]), ["foliage_grass", "painted"])
+        mapping = (self.project / "models" / "post.glb.import").read_text()
+        self.assertIn("res://materials/painted.tres", mapping)
+        self.assertIn("res://materials/foliage_grass.tres", mapping)
+        recipe = json.loads((self.project / "asset_manifest.json").read_text())["assets"]["models/post.glb"]
+        self.assertEqual((recipe["tool"], recipe["seed"]), ("blender", 2))
 
 
 if __name__ == "__main__":

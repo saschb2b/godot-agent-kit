@@ -12,7 +12,7 @@ project's autoloads load as usual.
 | `godot-agent scenario` | JSON input scripts with assertions, run in parallel, optional determinism diff |
 | `godot-agent check` | Every script (and scene) loaded in one process; parse errors by file:line |
 | `godot-agent api` | Offline class reference pinned to the installed Godot version |
-| `godot-agent asset` | Style rules per asset folder, validation of images, 3D models and audio, conforming any image to the style, Aseprite import to SpriteFrames, low-poly 3D models from seeded recipes with painted surface patterns, UI icons rendered from models, painted nine-slice UI frames, seeded sound effects, review sheets and model turntables, reproducible rebuilds |
+| `godot-agent asset` | Style rules per asset folder, validation of images, 3D models and audio, conforming any image to the style, Aseprite import to SpriteFrames, low-poly 3D models from seeded recipes with painted surface patterns, rigged and animated models from Blender build scripts, alpha-cut foliage cards, UI icons rendered from models, painted nine-slice UI frames, seeded sound effects, review sheets and model turntables, reproducible rebuilds |
 | MCP server `godot-agent` | The same, with captures returned as images |
 | Skill `godot-agent` | When and how to use all of the above |
 
@@ -27,7 +27,8 @@ cd godot-agent-kit
 The installer works in your home directory without sudo. It links the CLI into `~/.local/bin`,
 installs gdtoolkit (gdlint and gdformat), builds the API index and installs the skill. System
 packages need one manual step, which the installer prints when they are missing:
-`sudo apt install xvfb ffmpeg` (off-screen captures, audio checks). It also registers
+`sudo apt install xvfb ffmpeg` (off-screen captures, audio checks). `asset blender` needs
+Blender 4.2 or newer on PATH (`sudo snap install blender --classic`). It also registers
 these MCP servers with Claude Code (user scope): `godot-agent`, plus `godot` and `aseprite` when
 `../godot-mcp` and `../aseprite-mcp` are built. Run `godot-agent doctor` to see what is in place.
 
@@ -55,6 +56,8 @@ godot-agent asset aseprite ~/Documents/GitHub/my-game bat.aseprite --to res://ar
 godot-agent asset sfx ~/Documents/GitHub/my-game pickup --to res://sfx/coin.wav --variants 4
 godot-agent asset mesh ~/Documents/GitHub/my-game tree_round --to res://models/tree.glb --variants 3 --review
 godot-agent asset mesh ~/Documents/GitHub/my-game art_src/tower.json --to res://models/tower.glb
+godot-agent asset texture ~/Documents/GitHub/my-game foliage_pine --to res://textures/foliage_pine.png
+godot-agent asset blender ~/Documents/GitHub/my-game art_src/blender/pine.py --to res://models/pine.glb --seed 2 --review
 godot-agent asset icon ~/Documents/GitHub/my-game res://models/tower.glb --to res://ui/icons/tower.png --frame gold
 godot-agent asset ui ~/Documents/GitHub/my-game panel --to res://ui/frames/console --size 256x192
 godot-agent asset review ~/Documents/GitHub/my-game assets/audio models
@@ -64,7 +67,8 @@ godot-agent asset review ~/Documents/GitHub/my-game assets/audio models
 later keys win, the way CSS cascades. `init` drafts one rule per asset folder from what the files
 already share: size or frame grid, alpha, palette, silhouette contrast and audio levels. New files
 that break the pattern then fail `check`. Generators record their recipe in `asset_manifest.json`
-(preset and seed, mesh recipe, icon view, conform options, Aseprite source), so `asset regen`
+(preset and seed, mesh recipe, Blender script and params, icon view, conform options, Aseprite
+source), so `asset regen`
 rebuilds a file exactly. Models are written as glTF binary with vertex colors and a `.import` file
 that makes Godot show those colors; `review` renders them as turntables and a true-scale lineup.
 Rule keys are listed in [skill/SKILL.md](skill/SKILL.md#assets).

@@ -254,10 +254,18 @@ def _model_background(style: Style) -> str:
     return style.data.get("model_background") or style.background
 
 
-def _existing_material(project: Path, style: Style) -> str | None:
-    """The project's painted material, if one exists, so renders match the game."""
+def _existing_material(project: Path, style: Style) -> dict:
+    """Every material the project gives models, by name, so renders match the game:
+    the painted material plus each res://materials/<name>.tres (foliage_*, ...)."""
+    found = {}
+    folder = project / "materials"
+    if folder.is_dir():
+        for tres in sorted(folder.glob("*.tres")):
+            found[tres.stem] = f"res://materials/{tres.name}"
     rel = rel_path(project, style.data.get("model_material", "res://materials/painted.tres"))
-    return f"res://{rel}" if (project / rel).exists() else None
+    if (project / rel).exists():
+        found["painted"] = f"res://{rel}"
+    return found
 
 
 def _category(problem: str) -> str:
@@ -420,23 +428,30 @@ def _painted_material(project: Path, style: Style) -> str:
     return f"res://{rel}"
 
 
-def _model_import_file(project: Path, rel: str, material: str) -> None:
-    """Points the glTF's "painted" material at the vertex-color material.
+def _model_import_file(project: Path, rel: str, materials: str | dict) -> None:
+    """Points the glTF's materials at the project's, by name: "painted" at the
+    vertex-colour material (Godot's glTF importer ignores COLOR_0 for albedo),
+    foliage_* at their card materials, and so on.
 
-    Godot's glTF importer ignores COLOR_0 for albedo. Godot keeps these params and
-    fills in the rest on import; an existing uid is kept so scenes that reference
-    the model by uid stay valid.
+    Godot keeps these params and fills in the rest on import; an existing uid is
+    kept so scenes that reference the model by uid stay valid.
     """
+    if isinstance(materials, str):
+        materials = {meshes.PAINTED_MATERIAL: materials}
+    used = set(meshes.analyze_model(project / rel)["material_names"])
+    wanted = {name: path for name, path in sorted(materials.items()) if name in used}
     file = project / f"{rel}.import"
     text = file.read_text() if file.exists() else ""
-    if f'"use_external/path": "{material}"' in text:
+    if all(f'"use_external/path": "{path}"' in text for path in wanted.values()) and \
+            text.count('"use_external/enabled": true') == len(wanted):
         return
     uid = re.search(r'^uid="([^"]+)"', text, re.M)
     lines = ["[remap]", "", 'importer="scene"', 'type="PackedScene"']
     if uid:
         lines.append(f'uid="{uid[1]}"')
-    lines += ["", "[params]", "", "_subresources={", '"materials": {', f'"{meshes.PAINTED_MATERIAL}": {{',
-              '"use_external/enabled": true,', f'"use_external/path": "{material}"', "}", "}", "}", ""]
+    entries = [f'"{name}": {{\n"use_external/enabled": true,\n"use_external/path": "{path}"\n}}'
+               for name, path in wanted.items()]
+    lines += ["", "[params]", "", "_subresources={", '"materials": {', ",\n".join(entries), "}", "}", ""]
     file.write_text("\n".join(lines))
 
 
@@ -472,7 +487,7 @@ def make_mesh(project_dir: str, source: str, dest: str, seed: int = 1, variants:
                                                 **(colors or {})}}
         mesh = meshes.build_mesh(resolved_recipe, variant_seed)
         meshes.write_glb(mesh, project / out_rel, Path(out_rel).stem)
-        _model_import_file(project, out_rel, material)
+        _model_import_file(project, out_rel, {**_existing_material(project, style), "painted": material})
         if record:
             manifest.record(project, out_rel, {"tool": "mesh", "source": source_ref, "seed": variant_seed,
                                                "recipe": resolved_recipe, "license": GENERATED_LICENSE})
@@ -489,7 +504,7 @@ def make_mesh(project_dir: str, source: str, dest: str, seed: int = 1, variants:
     if review:
         report["preview"] = str(meshes.render_review(project, [_model_item(r) for r in results],
                                                      _out_dir(project, "mesh"), _model_background(style),
-                                                     material=material))
+                                                     material=_existing_material(project, style)))
     return report
 
 
@@ -540,13 +555,20 @@ def make_texture(project_dir: str, preset: str, dest: str, size: int = 256, seed
         rel = f"{rel[: -len(Path(rel).suffix)] if Path(rel).suffix else rel}.png"
     rule = style.rule_for(rel, "image")
     merged = {**rule.get("colors", {}), **(colors or {})}
-    image = textures.paint(preset, size, seed, merged)
+    card = preset in textures.CARDS
+    image = textures.paint_card(preset, size, seed) if card else textures.paint(preset, size, seed, merged)
     target = project / rel
     target.parent.mkdir(parents=True, exist_ok=True)
     image.save(target, optimize=True)
     import_file = project / f"{rel}.import"
     if not import_file.exists():
         import_file.write_text(textures.IMPORT_FILE)
+    if card:
+        # A foliage card gets its material: res://materials/<preset>.tres over the
+        # kit's foliage shader, which models' foliage_* materials are mapped to.
+        _install_template(project, "foliage.gdshader", "// godot-agent foliage")
+        (project / "materials" / f"{Path(rel).stem}.tres").write_text(FOLIAGE_MATERIAL_TRES.format(
+            name=Path(rel).stem, texture=f"res://{rel}"))
     if record:
         manifest.record(project, rel, {"tool": "texture", "preset": preset, "size": size, "seed": seed,
                                        "colors": merged, "license": GENERATED_LICENSE})
@@ -554,12 +576,93 @@ def make_texture(project_dir: str, preset: str, dest: str, size: int = 256, seed
         godot_import(project)
     report = images.validate_image(project, rel, rule, style)
     sheet = _out_dir(project, "texture") / "tiled.png"
-    tiled = images.Image.new("RGB", (size * 2, size * 2))
+    tiled = images.Image.new("RGBA" if card else "RGB", (size * 2, size * 2))
     for dx in (0, size):
         for dy in (0, size):
             tiled.paste(image, (dx, dy))
     tiled.save(sheet)
     report["preview"] = str(sheet)
+    return report
+
+
+FOLIAGE_MATERIAL_TRES = """[gd_resource type="ShaderMaterial" load_steps=3 format=3]
+
+[ext_resource type="Shader" path="res://materials/foliage.gdshader" id="1"]
+[ext_resource type="Texture2D" path="{texture}" id="2"]
+
+[resource]
+resource_name = "{name}"
+shader = ExtResource("1")
+shader_parameter/albedo_tex = ExtResource("2")
+"""
+
+
+def _install_template(project: Path, name: str, header: str) -> None:
+    """Copies a kit shader into res://materials/, refreshing it while it still carries
+    the kit's header (a project's own edits, without the header, are kept)."""
+    template = (Path(__file__).resolve().parent / "templates" / name).read_text()
+    target = project / "materials" / name
+    current = target.read_text() if target.exists() else ""
+    if not current or (current.startswith(header) and current.splitlines()[0] != template.splitlines()[0]):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(template)
+
+
+# ── Blender models ──
+
+def make_blender(project_dir: str, script: str, dest: str, seed: int = 1, params: dict | None = None,
+                 style_path: str | None = None, review: bool = False, import_into_godot: bool = True,
+                 record: bool = True, timeout: int = 600) -> dict:
+    """Runs a Blender build script headless and exports its scene to dest (.glb).
+
+    The script builds a model with the kit's `gab` helpers (godot_agent/blender/gab.py).
+    Materials map to the project's by name, the recipe (script, seed, params) is
+    recorded for `asset regen`, and the model is checked like any other.
+    """
+    import shutil
+    project = resolve_project(project_dir)
+    style = Style.load(project, style_path)
+    blender = shutil.which("blender")
+    if not blender:
+        raise GodotAgentError("blender not found on PATH")
+    source = Path(script).expanduser()
+    if not source.is_absolute():
+        source = (project / rel_path(project, script)) if (project / rel_path(project, script)).exists() \
+            else source.resolve()
+    if not source.exists():
+        raise GodotAgentError(f"No build script at {source}")
+    rel = rel_path(project, dest)
+    if Path(rel).suffix.lower() != ".glb":
+        rel = f"{rel[: -len(Path(rel).suffix)] if Path(rel).suffix else rel}.glb"
+    target = project / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    runner = Path(__file__).resolve().parent.parent / "blender" / "runner.py"
+    cmd = [blender, "-b", "--factory-startup", "--python-exit-code", "1", "-P", str(runner), "--",
+           "--script", str(source), "--out", str(target), "--seed", str(seed),
+           "--params", json.dumps(params or {})]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if proc.returncode != 0 or not target.exists():
+        log = (proc.stdout + proc.stderr).strip().splitlines()
+        errors = [line for line in log if "Error" in line or "Traceback" in line or line.startswith("  File")]
+        raise GodotAgentError("blender build failed:\n" + "\n".join((errors or log)[-25:]))
+    _painted_material(project, style)
+    _model_import_file(project, rel, _existing_material(project, style))
+    script_ref = source.resolve().relative_to(project).as_posix() if source.resolve().is_relative_to(project) \
+        else str(source.resolve())
+    if record:
+        manifest.record(project, rel, {"tool": "blender", "script": script_ref, "seed": seed, "params": params or {},
+                                       "license": GENERATED_LICENSE})
+    report = meshes.validate_model(project, rel, style.rule_for(rel, "model"), style)
+    report["notes"].append(next((l for l in proc.stdout.splitlines() if l.startswith("godot-agent: exported")),
+                                "exported"))
+    if import_into_godot:
+        godot_import(project)
+        if load_errors := _verify_load(project, [rel]):
+            report["ok"] = False
+            report["problems"] += load_errors
+    if review:
+        report["preview"] = str(meshes.render_review(project, [_model_item(report)], _out_dir(project, "blender"),
+                                                     _model_background(style), material=_existing_material(project, style)))
     return report
 
 
@@ -643,6 +746,9 @@ def regen(project_dir: str, path: str, style_path: str | None = None) -> dict:
     if entry["tool"] == "mesh":
         return make_mesh(str(project), entry["source"], rel, seed=entry["seed"], recipe=entry["recipe"],
                          style_path=style_path)
+    if entry["tool"] == "blender":
+        return make_blender(str(project), entry["script"], rel, seed=entry["seed"], params=entry.get("params"),
+                            style_path=style_path)
     if entry["tool"] == "texture":
         return make_texture(str(project), entry["preset"], rel, size=entry["size"], seed=entry["seed"],
                             colors=entry.get("colors"), style_path=style_path)

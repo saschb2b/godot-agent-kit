@@ -219,24 +219,28 @@ func _load_model(path: String) -> Node3D:
 	return null
 
 
-## Godot ignores glTF vertex colors for albedo; an imported model gets them through
-## the external "painted" material its .import file names, so do the same here:
-## the project's painted material when the listing names one, else vertex colors.
+## An imported model gets the project's materials through its .import file (by
+## material name: painted, foliage_*, ...); do the same here, from the listing's
+## "materials" {name: res path}. Unmapped vertex-coloured surfaces show their colours.
 func _paint_vertex_colors(scene: Node) -> void:
-	var project_material: Material = null
-	var material_path := str(_list.get("material", ""))
-	if material_path != "" and material_path != "<null>" and ResourceLoader.exists(material_path):
-		project_material = load(material_path)
+	var mapped := {}
+	var listed: Variant = _list.get("materials", {})
+	if listed is Dictionary:
+		for name: String in listed:
+			if ResourceLoader.exists(str(listed[name])):
+				mapped[name] = load(str(listed[name]))
 	for mi: MeshInstance3D in scene.find_children("*", "MeshInstance3D", true, false):
 		for s in mi.mesh.get_surface_count():
 			var material := mi.get_active_material(s) as BaseMaterial3D
-			if material == null or material.albedo_texture != null:
+			if material == null:
+				continue
+			if mapped.has(material.resource_name):
+				mi.set_surface_override_material(s, mapped[material.resource_name])
+				continue
+			if material.albedo_texture != null:
 				continue
 			var colors: Variant = mi.mesh.surface_get_arrays(s)[Mesh.ARRAY_COLOR]
 			if colors == null or (colors as PackedColorArray).is_empty():
-				continue
-			if project_material and material.resource_name == "painted":
-				mi.set_surface_override_material(s, project_material)
 				continue
 			var painted := material.duplicate() as BaseMaterial3D
 			painted.vertex_color_use_as_albedo = true
