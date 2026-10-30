@@ -32,6 +32,22 @@ ADMIT_SPACING_S = 0.4
 ADMIT_PLENTY_GB = 6.0
 
 
+# A process the kit started is stopped once it holds more than this (GODOT_AGENT_MAX_RSS_GB):
+# a scenario stuck in a loop that keeps allocating fails instead of taking the machine down.
+MAX_RSS_GB = float(os.environ.get("GODOT_AGENT_MAX_RSS_GB", "6"))
+
+
+def rss_gb(pid: int) -> float | None:
+    """A running process's resident memory in GB, or None where it cannot be read."""
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) / 1048576
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
 def mem_available_gb() -> float | None:
     try:
         for line in Path("/proc/meminfo").read_text().splitlines():

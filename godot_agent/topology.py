@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import runner
-from .env import GodotAgentError, admit
+from .env import MAX_RSS_GB, GodotAgentError, admit, rss_gb
 
 PLACEHOLDERS = ("{port}", "{client}", "{clients}", "{out}", "{project}", "{python}")
 DEFAULT_MAX_FPS = 60
@@ -335,6 +335,17 @@ def run(godot: str, project: Path, job: runner.Job, timeout: float, renderer: st
                     for c in clients:
                         c.killed = c.proc.poll() is None
                     break
+                for k, c in enumerate(clients, 1):
+                    held = rss_gb(c.proc.pid) if c.proc.poll() is None else None
+                    if held is not None and held > MAX_RSS_GB:
+                        c.killed = True
+                        problems.append(f"client {k} stopped: it held {held:.1f} GB, over the {MAX_RSS_GB:g} GB cap "
+                                        "(GODOT_AGENT_MAX_RSS_GB)")
+                        stop(c.proc, grace=0.5)
+                held = rss_gb(server.proc.pid) if server and server.proc.poll() is None else None
+                if held is not None and held > MAX_RSS_GB:
+                    problems.append(f"server stopped: it held {held:.1f} GB, over the {MAX_RSS_GB:g} GB cap")
+                    stop(server.proc, grace=0.5)
                 time.sleep(0.05)
             if server and server.proc.poll() not in (None, 0):
                 problems.append(f"server exited with {server.proc.returncode} while the clients ran")

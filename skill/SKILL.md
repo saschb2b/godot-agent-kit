@@ -366,7 +366,10 @@ style's `background`), `max_baseline_jitter` (feet bobbing between frames), `imp
   overrides), so several agents rendering at once queue instead of running the machine out of memory.
   Every Godot start (headless runs, topology clients, checks, imports) also waits while the machine has less
   than its need (0.6 GB headless, 2 GB rendered) free above a 3 GB reserve (`GODOT_AGENT_RESERVE_GB`); after
-  15 minutes (`GODOT_AGENT_ADMIT_TIMEOUT`) it starts anyway. Prefer `--headless` when no capture is needed.
+  15 minutes (`GODOT_AGENT_ADMIT_TIMEOUT`) it starts anyway. A run or topology process that holds more than
+  6 GB (`GODOT_AGENT_MAX_RSS_GB`) is stopped and reported, so a scenario stuck in an allocating loop fails
+  instead of taking the machine down. Test code of your own that loops on a condition (`while not done:`)
+  needs a bound too, above all when you run new tests against the old code to see them fail. Prefer `--headless` when no capture is needed.
   3D renders through Vulkan on llvmpipe; it works (Forward+ included) but is slow.
 - `--visible` opens a real window at real speed so a person can watch.
 - No image-generation model is wired in. Output from any generator goes through `asset conform`.

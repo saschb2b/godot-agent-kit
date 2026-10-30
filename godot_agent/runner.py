@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import sheet, topology
-from .env import (CACHE_DIR, HEADLESS_GB, RUNTIME_DIR, GodotAgentError, admit, find_godot, project_name,
+from .env import (CACHE_DIR, HEADLESS_GB, MAX_RSS_GB, RUNTIME_DIR, GodotAgentError, admit, find_godot, project_name, rss_gb,
                   refresh_class_cache, resolve_project, virtual_display)
 
 STEP_KINDS = ("wait", "wait_until", "wait_signal", "press", "release", "tap", "key", "click", "hover",
@@ -228,18 +228,41 @@ def run_job(godot: str, project: Path, job: Job, display: str | None, visible: b
     cmd, env, data_home, rendered = launch_command(godot, project, job, display, visible, renderer)
     admit(RENDER_GB if rendered else HEADLESS_GB)
     started = time.monotonic()
-    timed_out = False
     try:
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout, env=env)
-        returncode, output = proc.returncode, proc.stdout
-    except subprocess.TimeoutExpired as exc:
-        returncode, output, timed_out = -1, exc.output or b"", True
+        returncode, output, reason = run_capped(cmd, timeout, env)
     finally:
         shutil.rmtree(data_home, ignore_errors=True)
     log_text = output.decode("utf-8", errors="replace")
     (job.out_dir / "godot.log").write_text(log_text)
-    return make_record(job, returncode, log_text, rendered, started,
-                       f"timed out after {timeout}s" if timed_out else None)
+    return make_record(job, returncode, log_text, rendered, started, reason)
+
+
+def run_capped(cmd: list[str], timeout: float, env: dict | None = None) -> tuple[int, bytes, str | None]:
+    """Runs a process to its end, its output gathered; stops it past `timeout` seconds or once it
+    holds more than MAX_RSS_GB. Returns (returncode, output, why it was stopped or None)."""
+    import threading
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+    chunks: list[bytes] = []
+    reader = threading.Thread(target=lambda: chunks.extend(iter(lambda: proc.stdout.read(65536), b"")),
+                              daemon=True)
+    reader.start()
+    deadline = time.monotonic() + timeout
+    reason = None
+    while proc.poll() is None:
+        if time.monotonic() >= deadline:
+            reason = f"timed out after {timeout}s"
+        else:
+            held = rss_gb(proc.pid)
+            if held is not None and held > MAX_RSS_GB:
+                reason = (f"stopped: it held {held:.1f} GB, over the {MAX_RSS_GB:g} GB cap "
+                          "(GODOT_AGENT_MAX_RSS_GB); a loop that keeps allocating?")
+        if reason:
+            proc.kill()
+            break
+        time.sleep(0.2)
+    proc.wait()
+    reader.join(timeout=10)
+    return (-1 if reason else proc.returncode), b"".join(chunks), reason
 
 
 def make_record(job: Job, returncode: int, log_text: str, rendered: bool, started: float,
