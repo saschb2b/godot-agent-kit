@@ -367,7 +367,8 @@ style's `background`), `max_baseline_jitter` (feet bobbing between frames), `imp
   3D renders through Vulkan on llvmpipe; it works (Forward+ included) but is slow.
 - `--visible` opens a real window at real speed so a person can watch.
 - No image-generation model is wired in. Output from any generator goes through `asset conform`.
-- 3D models are procedural low poly from recipes; there is no sculpting, rigging or skeletal
-  animation. Animate in code (bob, lean, scale) or bring rigged models from elsewhere.
+- 3D models are procedural low poly: mesh recipes, or Blender build scripts with the `gab` and `chibi`
+  helpers, which can rig a simple armature and key a walk or flap cycle. There is no sculpting; anything
+  subtler than a looped cycle is animated in code (bob, lean, scale) or brought in rigged from elsewhere.
 - Music is not generated, and nothing replaces a person listening: ask the user to judge feel.
 - Live editor manipulation (scene building, interactive play) belongs to the separate `godot` MCP.

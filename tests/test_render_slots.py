@@ -5,9 +5,11 @@
 
 import os
 import sys
+import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -19,6 +21,13 @@ class RenderSlotTest(unittest.TestCase):
     def test_one_slot_runs_renders_one_at_a_time(self):
         os.environ["GODOT_AGENT_RENDER_SLOTS"] = "1"
         self.addCleanup(os.environ.pop, "GODOT_AGENT_RENDER_SLOTS")
+        # Private lock files: the real slots are machine-wide, and another agent's render
+        # holding slot 0 would stall this test.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patcher = mock.patch.object(runner, "CACHE_DIR", Path(tmp.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         active, peak, lock = [0], [0], threading.Lock()
 
         def render():
