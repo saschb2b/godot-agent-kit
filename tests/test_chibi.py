@@ -303,13 +303,15 @@ class ChibiFixtureTest(unittest.TestCase):
                 self.assertGreater(grey.getpixel((2, 2)), 240, f"{name}: white ground")
                 box = grey.point(lambda v: 255 if v < 40 else 0).getbbox()
                 self.assertTrue(box[0] > 0 and box[2] < grey.width, f"{name}: the whole figure is in frame")
-        # front and back silhouettes are the same width: the figure turns about its own axis
+        # front and back silhouettes are about the same width: the figure turns about its own
+        # axis (a turntable off its axis would differ by tens of pixels; the watering can's
+        # spout, reaching out toward the front camera, widens the front view by a few)
         widths = []
         for v in (0, 3):
             with Image.open(frames / f"0_sil_{v}.png") as img:
                 box = img.convert("L").point(lambda p: 255 if p < 40 else 0).getbbox()
                 widths.append(box[2] - box[0])
-        self.assertLess(abs(widths[0] - widths[1]), 6)
+        self.assertLess(abs(widths[0] - widths[1]), 12)
         # the face close-up is mostly the head: skin and paint, not background
         with Image.open(frames / "0_face_0.png") as img:
             centre = img.convert("RGB").crop((120, 120, 240, 240))

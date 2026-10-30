@@ -5,8 +5,9 @@
 
 2.7 heads tall: a wide straw sun hat with a red ribbon band, a short brown bob (a cap,
 three fringe clumps, two side locks), a green smock with a cream hem band and a round
-cream collar, garden-glove mittens, chunky boots, and a trowel in her right mitten. Left
-fist on her hip, head tipped a little to her left.
+cream collar, garden-glove mittens, chunky boots, and a watering can hanging from her right
+mitten (a gardener's prop that cannot read as a blade). Left fist on her hip, head tipped a
+little to her left.
 
 Params: expression (a key of chibi.EXPRESSIONS, default cheerful), bust=1 (cut at the
 hips, for a portrait), check=1 (fail when over budget or outside 2.5 to 3 heads).
@@ -26,7 +27,7 @@ C = {
     "skin": "#e8b48c", "blush": "#ee8f80", "hair": "#5a3a2a", "brow": "#3e261a", "iris": "#2f5a3a",
     "straw": "#e6c072", "ribbon": "#c0443a", "smock": "#5f8f4a", "cream": "#efe2c0",
     "glove": "#c98a4a", "boot": "#4a3a30", "boot_cuff": "#7a5a40", "sole": "#3a2c24",
-    "wood": "#8a5a3a", "steel": "#b8c0c8",
+    "can": "#5f93b8", "can_dark": "#3f6a8a",
 }
 
 SPEC = {
@@ -85,21 +86,34 @@ collar = chibi.tube("collar", [Vector((0.092 * math.cos(t), 0.006 + 0.084 * math
                     [(0.030, 0.024)] * 16, sides=6, up=Z, closed=True)
 fig.add(collar, "collar", C["cream"])
 
-# ── 7 to 10: arms and garden-glove mittens; her right hand holds the trowel ──
-GRIP = Vector((-0.186, -0.080, 0.262))
-fig.arm(-1, [(-0.116, 0.0, 0.440), (-0.192, 0.010, 0.350), GRIP + Vector((0.006, 0.026, 0.016))], 0.042,
+# ── 7 to 10: arms and garden-glove mittens; her right hand carries a watering can ──
+# The prop is round and blunt on purpose: a tool in a Builder's hand must never read as a
+# short blade (a trowel pointing down did, at game distance).
+GRIP = Vector((-0.244, -0.118, 0.266))
+fig.arm(-1, [(-0.116, 0.0, 0.440), (-0.200, 0.000, 0.350), GRIP + Vector((0.006, 0.026, 0.016))], 0.042,
         C["smock"], C["cream"])
 fig.arm(1, [(0.116, 0.0, 0.440), (0.232, 0.040, 0.338), (0.194, -0.026, 0.262)], 0.042, C["smock"], C["cream"])
 fig.mitten(-1, GRIP, fingers=(0.1, -0.6, -1.0), back=(-1.0, 0.0, 0.0), size=(0.068, 0.060, 0.080),
            colour=C["glove"], curl=0.1)
 fig.mitten(1, (0.188, -0.034, 0.250), fingers=(-0.3, -0.5, -1.0), back=(1.0, 0.0, 0.2), size=(0.070, 0.058, 0.078),
            colour=C["glove"])
-TOOL = Vector((0.0, -0.75, -0.66)).normalized()   # the trowel points forward and down
-handle = chibi.tube("trowel_handle", [GRIP - TOOL * 0.040, GRIP + TOOL * 0.050], [0.013, 0.012], sides=6)
-fig.add(handle, "prop", C["wood"], smooth=50)
-blade = chibi.teardrop("trowel_blade", GRIP + TOOL * 0.046, TOOL, 0.095, 0.058, 0.012, Vector((1.0, 0.0, 0.0)),
-                       taper=0.55, segs=6, rows=3)
-fig.add(blade, "prop", C["steel"])
+CAN = GRIP + Vector((-0.004, -0.010, -0.108))            # the can's middle, hanging under the grip
+body = chibi.blob("can_body", CAN, (0.068, 0.074, 0.060), segs=12, rows=6, power=2.6)
+fig.add(body, "prop", C["can"])
+lid = chibi.tube("can_rim", [CAN + Vector((0.0, 0.0, 0.056)), CAN + Vector((0.0, 0.0, 0.065))],
+                 [(0.040, 0.040), (0.036, 0.036)], sides=10)
+fig.add(lid, "prop", C["can_dark"])
+handle = chibi.tube("can_handle", [CAN + Vector((0.0, 0.050, 0.046)), CAN + Vector((0.0, 0.038, 0.100)),
+                                   GRIP + Vector((0.0, 0.000, 0.004)), CAN + Vector((0.0, -0.040, 0.100)),
+                                   CAN + Vector((0.0, -0.054, 0.046))], [0.010] * 5, sides=6)
+fig.add(handle, "prop", C["can_dark"], smooth=50)
+TIP = CAN + Vector((-0.110, -0.120, 0.086))              # the spout rises forward and out, away from her
+spout = chibi.tube("can_spout", [CAN + Vector((-0.030, -0.052, -0.012)), CAN + Vector((-0.070, -0.090, 0.034)), TIP],
+                   [0.016, 0.013, 0.012], sides=6)
+fig.add(spout, "prop", C["can"], smooth=50)
+rose = chibi.blob("can_rose", TIP + Vector((-0.006, -0.006, 0.008)), (0.028, 0.014, 0.028), segs=8, rows=4,
+                  rot=rot(x=-30) @ rot(z=-40))
+fig.add(rose, "prop", C["can_dark"])
 
 # ── 11, 12: boots, toes out ──
 for side in (-1, 1):
