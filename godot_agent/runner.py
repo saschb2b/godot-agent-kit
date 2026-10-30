@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import sheet, topology
-from .env import (CACHE_DIR, RUNTIME_DIR, GodotAgentError, find_godot, project_name,
+from .env import (CACHE_DIR, HEADLESS_GB, RUNTIME_DIR, GodotAgentError, admit, find_godot, project_name,
                   refresh_class_cache, resolve_project, virtual_display)
 
 STEP_KINDS = ("wait", "wait_until", "wait_signal", "press", "release", "tap", "key", "click", "hover",
@@ -226,6 +226,7 @@ def run_job(godot: str, project: Path, job: Job, display: str | None, visible: b
             renderer: str | None = None) -> dict:
     job.out_dir.mkdir(parents=True, exist_ok=True)
     cmd, env, data_home, rendered = launch_command(godot, project, job, display, visible, renderer)
+    admit(RENDER_GB if rendered else HEADLESS_GB)
     started = time.monotonic()
     timed_out = False
     try:

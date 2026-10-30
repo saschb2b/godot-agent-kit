@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 
 from . import simlint
-from .env import RUNTIME_DIR, find_godot, refresh_class_cache, resolve_project
+from .env import RUNTIME_DIR, admit, find_godot, refresh_class_cache, resolve_project
 from .runner import parse_log
 
 RES_PATH_RE = re.compile(r"(res://[^\s:)\"']+)(?::(\d+))?")
@@ -39,6 +39,7 @@ def check_project(project: str | os.PathLike, resources: bool = False, lint: boo
         cmd.append("--ga-include-addons")
     if only:
         cmd.append("--ga-only=" + ",".join(only))
+    admit()
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
     text = proc.stdout.decode("utf-8", errors="replace")
     # The checker holds every loaded resource, so leak reports at exit are expected.

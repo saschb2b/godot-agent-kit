@@ -18,6 +18,60 @@ RUNTIME_DIR = KIT_ROOT / "runtime"
 CONFIG_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "godot-agent" / "config.json"
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "godot-agent"
 
+# ── Memory admission ──
+# Every Godot process the kit starts (a scenario run, a topology client, a check, an import)
+# first asks for room: it waits while the machine has less than `need` GB available above a
+# reserve. All godot-agent processes on the machine take turns through one lock file, so
+# several agents starting suites at once cannot run the machine out of memory together.
+HEADLESS_GB = 0.6
+RESERVE_GB = float(os.environ.get("GODOT_AGENT_RESERVE_GB", "3"))
+ADMIT_TIMEOUT_S = float(os.environ.get("GODOT_AGENT_ADMIT_TIMEOUT", "900"))
+# Starts are spaced this far apart while memory is tight, so each reading sees the last start.
+ADMIT_SPACING_S = 0.4
+# With this much room to spare a start does not wait or space at all.
+ADMIT_PLENTY_GB = 6.0
+
+
+def mem_available_gb() -> float | None:
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / 1048576
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def admit(need_gb: float = HEADLESS_GB, timeout: float | None = None) -> float:
+    """Waits until the machine has `need_gb` available above RESERVE_GB, then returns how long
+    it waited (seconds). Where memory cannot be read (not Linux) it returns at once; after
+    `timeout` (GODOT_AGENT_ADMIT_TIMEOUT, default 15 minutes) it gives up waiting and starts
+    anyway, so a guard never becomes a deadlock."""
+    free = mem_available_gb()
+    if free is None or free >= need_gb + RESERVE_GB + ADMIT_PLENTY_GB:
+        return 0.0
+    try:
+        import fcntl
+    except ImportError:
+        return 0.0
+    started = time.monotonic()
+    deadline = started + (ADMIT_TIMEOUT_S if timeout is None else timeout)
+    folder = CACHE_DIR / "render-slots"
+    folder.mkdir(parents=True, exist_ok=True)
+    with open(folder / "admit.lock", "a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            while True:
+                free = mem_available_gb()
+                if free is None or free >= need_gb + RESERVE_GB or time.monotonic() >= deadline:
+                    break
+                time.sleep(1.0)
+            time.sleep(ADMIT_SPACING_S)
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+    return time.monotonic() - started
+
+
 
 class GodotAgentError(Exception):
     """An error with a message meant for the user or agent, not a traceback."""
@@ -109,6 +163,7 @@ def refresh_class_cache(godot: str, project: Path, force: bool = False, timeout:
         return None
     started = time.monotonic()
     print(f"godot-agent: refreshing class cache for {project.name} (godot --import)...", file=sys.stderr)
+    admit()
     proc = subprocess.run([godot, "--headless", "--path", str(project), "--import"],
                           capture_output=True, text=True, timeout=timeout)
     if cache.exists():

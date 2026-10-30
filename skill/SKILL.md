@@ -363,7 +363,10 @@ style's `background`), `max_baseline_jitter` (feet bobbing between frames), `imp
 - Captures need rendering: Xvfb is used automatically; `--headless` skips captures but is faster.
 - A rendered run holds about 2 GB. Rendered runs, `asset blender` builds and model or icon renders from all
   godot-agent processes on the machine share a few slots (one per 6 GB of RAM; `GODOT_AGENT_RENDER_SLOTS`
-  overrides), so several agents rendering at once queue instead of running the machine out of memory. Prefer `--headless` when no capture is needed.
+  overrides), so several agents rendering at once queue instead of running the machine out of memory.
+  Every Godot start (headless runs, topology clients, checks, imports) also waits while the machine has less
+  than its need (0.6 GB headless, 2 GB rendered) free above a 3 GB reserve (`GODOT_AGENT_RESERVE_GB`); after
+  15 minutes (`GODOT_AGENT_ADMIT_TIMEOUT`) it starts anyway. Prefer `--headless` when no capture is needed.
   3D renders through Vulkan on llvmpipe; it works (Forward+ included) but is slow.
 - `--visible` opens a real window at real speed so a person can watch.
 - No image-generation model is wired in. Output from any generator goes through `asset conform`.

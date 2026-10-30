@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import runner
-from .env import GodotAgentError
+from .env import GodotAgentError, admit
 
 PLACEHOLDERS = ("{port}", "{client}", "{clients}", "{out}", "{project}", "{python}")
 DEFAULT_MAX_FPS = 60
@@ -94,6 +94,7 @@ def spawn(cmd: list[str], **kwargs) -> subprocess.Popen:
         kwargs["creationflags"] = kwargs.get("creationflags", 0) | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
+    admit()
     proc = subprocess.Popen(cmd, **kwargs)
     with _LIVE_LOCK:
         _LIVE.add(proc)
