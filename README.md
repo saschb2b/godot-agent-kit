@@ -12,7 +12,7 @@ project's autoloads load as usual.
 | `godot-agent scenario` | JSON input scripts with assertions, run in parallel, optional determinism diff; tick-exact fast-forward; multi-process topologies (a server plus headless clients) with state-hash comparison |
 | `godot-agent check` | Every script (and scene) loaded in one process; parse errors by file:line; a determinism lint for lockstep simulation code |
 | `godot-agent api` | Offline class reference pinned to the installed Godot version |
-| `godot-agent asset` | Style rules per asset folder, validation of images, 3D models and audio, conforming any image to the style, Aseprite import to SpriteFrames, low-poly 3D models from seeded recipes with painted surface patterns, rigged and animated models from Blender build scripts, alpha-cut foliage cards, UI icons rendered from models, painted nine-slice UI frames, seeded sound effects, review sheets and model turntables, reproducible rebuilds |
+| `godot-agent asset` | Style rules per asset folder, validation of images, 3D models and audio, conforming any image to the style, Aseprite import to SpriteFrames, low-poly 3D models from seeded recipes with painted surface patterns, rigged and animated models from Blender build scripts, chibi toon characters with a toon shader, alpha-cut foliage cards, UI icons rendered from models, painted nine-slice UI frames, seeded sound effects, review sheets and model turntables, reproducible rebuilds |
 | MCP server `godot-agent` | The same, with captures returned as images |
 | Skill `godot-agent` | When and how to use all of the above |
 
@@ -77,6 +77,7 @@ godot-agent asset mesh ~/Documents/GitHub/my-game tree_round --to res://models/t
 godot-agent asset mesh ~/Documents/GitHub/my-game art_src/tower.json --to res://models/tower.glb
 godot-agent asset texture ~/Documents/GitHub/my-game foliage_pine --to res://textures/foliage_pine.png
 godot-agent asset blender ~/Documents/GitHub/my-game art_src/blender/pine.py --to res://models/pine.glb --seed 2 --review
+godot-agent asset blender ~/Documents/GitHub/my-game art_src/blender/hero.py --to res://models/hero.glb --turnaround
 godot-agent asset icon ~/Documents/GitHub/my-game res://models/tower.glb --to res://ui/icons/tower.png --frame gold
 godot-agent asset ui ~/Documents/GitHub/my-game panel --to res://ui/frames/console --size 256x192
 godot-agent asset review ~/Documents/GitHub/my-game assets/audio models
@@ -89,7 +90,10 @@ that break the pattern then fail `check`. Generators record their recipe in `ass
 (preset and seed, mesh recipe, Blender script and params, icon view, conform options, Aseprite
 source), so `asset regen`
 rebuilds a file exactly. Models are written as glTF binary with vertex colors and a `.import` file
-that makes Godot show those colors; `review` renders them as turntables and a true-scale lineup.
+that makes Godot show those colors; `review` renders them as turntables and a true-scale lineup, or with
+`--turnaround` as character sheets (turnaround, silhouettes, the face close up). Blender build scripts
+get the kit's helpers: `gab` (shapes, decals, paint, foliage cards, rigs) and `chibi` (toon characters:
+a head, a face from an expression and a few numbers, hair, a hat or hood, coat, mittens, boots).
 Rule keys are listed in [skill/SKILL.md](skill/SKILL.md#assets).
 
 ## Example
@@ -141,3 +145,12 @@ Runs the asset pipeline against a temporary copy of the fixture. It conforms a l
 anti-aliased drawing into a 16x16 palette sprite, flags a broken sprite, regenerates sound
 effects byte for byte, imports an Aseprite file that Godot then loads, builds every mesh preset
 and checks Godot shows a model's vertex colors, and renders an icon from a model.
+
+```bash
+python3 -m unittest tests/test_chibi.py -v
+```
+
+Builds the fixture character `tests/fixture/art_src/blender/gardener.py` and its bust: one toon mesh
+within budget, the shade classes in its vertex alpha, the toon material installed and imported
+without LODs, a failing budget check, the helpers inside Blender (closed shapes, decals at their lift,
+face presets, the hat), and its character sheet. The Blender tests skip when Blender is missing.

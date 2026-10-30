@@ -315,16 +315,20 @@ def asset_icon(project: str, model: str, to: str, size: int = 64, pitch: float =
 
 @mcp.tool()
 def asset_blender(project: str, script: str, to: str, seed: int = 1, params: dict[str, str] | None = None,
-                  review: bool = True) -> list:
+                  review: bool = True, turnaround: bool = False) -> list:
     """Build a model with a Blender Python script, headless, and export it to `to` (.glb). The
     script starts from an empty scene and uses the kit's helpers (`import gab`; see the skill):
-    smooth organic bodies (subdivide, displace_noise, smooth), vertex paint for the painted
-    material (paint), foliage cards (bough, card, tint) for alpha-cut needle/leaf textures,
-    emissive parts (glow), rigs and looping animations (armature, skin, animate). Front faces -Y in
-    Blender. Materials map to the project's by name; recipe recorded for asset_regen; returns
-    validation and turntable renders."""
+    smooth organic bodies (subdivide, displace_noise, smooth, blob, tube, loft), vertex paint for
+    the painted material (paint), foliage cards (bough, card, tint) for alpha-cut needle/leaf
+    textures, emissive parts (glow), rigs and looping animations (armature, skin, animate), and
+    chibi toon characters (`import chibi`: Figure with head, face from an expression, hair, hat or
+    hood, coat, arms, mittens, boots; material "toon" gets the kit's toon shader). Front faces -Y
+    in Blender. Materials map to the project's by name; recipe recorded for asset_regen; returns
+    validation and turntable renders, or with turnaround a character sheet (turnaround,
+    silhouettes, the face close up)."""
     def run() -> list:
-        result = pipeline.make_blender(project, script, to, seed=seed, params=params, review=review)
+        result = pipeline.make_blender(project, script, to, seed=seed, params=params, review=review,
+                                       turnaround=turnaround)
         return [_format_result(result)] + ([_image(result["preview"], 1000)] if result.get("preview") else [])
     return _asset_guard(run)
 
@@ -365,11 +369,15 @@ def asset_ui(project: str, preset: str, to: str, size: list[int], fill: str = "s
 
 
 @mcp.tool()
-def asset_review(project: str, paths: list[str] | None = None) -> list:
+def asset_review(project: str, paths: list[str] | None = None, turnaround: bool = False,
+                 focus: float | None = None, face_size: float | None = None) -> list:
     """Look at assets: images on the game's background color (pixel-crisp, pass/fail borders),
     3D models as turntables plus a true-scale lineup on a 1-unit grid, and audio as waveform over
-    spectrogram (attack, decay and pitch movement are visible)."""
-    return _asset_guard(lambda: [_image(sheet, 1000) for sheet in pipeline.review(project, paths)])
+    spectrogram (attack, decay and pitch movement are visible). turnaround: models as character
+    sheets instead (front, 3/4, side, back from one eye-level camera; silhouettes; with focus,
+    the face's height, the face close up)."""
+    return _asset_guard(lambda: [_image(sheet, 1000) for sheet in pipeline.review(
+        project, paths, turnaround=turnaround, focus=focus, face_size=face_size)])
 
 
 @mcp.tool()

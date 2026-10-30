@@ -11,6 +11,14 @@
 ##
 ## With "icon": true it writes one <out>/<index>_icon.png per model instead: a
 ## tight 3/4 view ("pitch", "yaw") on a transparent background, for UI icons.
+##
+## With "turnaround": true it writes, per model, a character turnaround from one fixed
+## camera at eye level ("pitch", default 10) while the model turns: <index>_turn_<v>.png
+## for each of "views" ([[label, yaw], ...]) at "size" [w, h], lit by a key from the upper
+## left and a cool rim from behind; <index>_sil_<v>.png, the same views as black
+## silhouettes on white at "sil_size", plus <index>_sil_top.png from "top_pitch" (a
+## strategy camera); and with "focus" (the face's height) <index>_face_<k>.png: the face
+## close up at yaw 0 and 35 and under a low side light, "face_size" metres tall.
 extends SceneTree
 
 var _list: Dictionary
@@ -18,6 +26,7 @@ var _out := ""
 var _viewport: SubViewport
 var _stage: Node3D
 var _camera: Camera3D
+var _env: Environment
 
 
 func _initialize() -> void:
@@ -46,6 +55,7 @@ func _build_studio() -> void:
 
 	var background := Color(str(_list.get("background", "#3a4a3c")))
 	var env := Environment.new()
+	_env = env
 	env.background_mode = Environment.BG_COLOR
 	env.background_color = background
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
@@ -98,6 +108,9 @@ void fragment() {
 func _render_all() -> void:
 	if bool(_list.get("icon", false)):
 		await _render_icons()
+		return
+	if bool(_list.get("turnaround", false)):
+		await _render_turnarounds()
 		return
 	var size := int(_list.get("size", 256))
 	var views := int(_list.get("views", 4))
@@ -196,6 +209,108 @@ func _render_icons() -> void:
 	file.store_string(JSON.stringify({"models": models}))
 	file.close()
 	quit(0)
+
+
+func _render_turnarounds() -> void:
+	var key: DirectionalLight3D = null
+	for child in _viewport.get_children():
+		if child is MeshInstance3D:
+			(child as MeshInstance3D).visible = false  # the ground grid
+		elif child is DirectionalLight3D:
+			key = child as DirectionalLight3D
+	key.shadow_enabled = false
+	var rim := DirectionalLight3D.new()
+	rim.rotation_degrees = Vector3(-20, 150, 0)
+	rim.light_color = Color(0.6, 0.72, 1.0)
+	rim.light_energy = 0.8
+	_viewport.add_child(rim)
+	_camera.fov = 30.0
+	var background := Color(str(_list.get("background", "#2b2622")))
+	var views: Array = _list.get("views", [["front", 0], ["3/4", 35], ["side", 90], ["back", 180]])
+	var pitch := float(_list.get("pitch", 10.0))
+	var size: Array = _list.get("size", [300, 440])
+	var sil_size: Array = _list.get("sil_size", [200, 290])
+	var black := StandardMaterial3D.new()
+	black.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	black.albedo_color = Color.BLACK
+	var models: Array = _list.get("models", [])
+	var info: Array = []
+	await process_frame
+	for i in models.size():
+		var entry: Dictionary = models[i]
+		_clear_stage()
+		var model := _load_model(str(entry["path"]))
+		if model == null:
+			info.append({"path": entry["path"], "error": "could not load"})
+			continue
+		_stage.add_child(model)
+		_stage.rotation = Vector3.ZERO
+		var box := _bounds(model)
+		info.append({"path": entry["path"], "aabb_size": [box.size.x, box.size.y, box.size.z]})
+		# shaded, then the same views as silhouettes, one camera for every view
+		for pass_index in 2:
+			var silhouette := pass_index == 1
+			var tile: Array = sil_size if silhouette else size
+			_viewport.size = Vector2i(int(tile[0]), int(tile[1]))
+			_env.background_color = Color.WHITE if silhouette else background
+			for mi: MeshInstance3D in model.find_children("*", "MeshInstance3D", true, false):
+				mi.material_override = black if silhouette else null
+			key.rotation_degrees = Vector3(-35, -40, 0)
+			_fit_turning(box, pitch, 0.04)
+			for v in views.size():
+				_stage.rotation.y = deg_to_rad(float(views[v][1]))
+				await _capture("%s/%d_%s_%d.png" % [_out, i, "sil" if silhouette else "turn", v])
+			if silhouette:
+				_stage.rotation.y = 0.0
+				_fit_turning(box, float(_list.get("top_pitch", 55.0)), 0.04)
+				await _capture("%s/%d_sil_top.png" % [_out, i])
+		for mi: MeshInstance3D in model.find_children("*", "MeshInstance3D", true, false):
+			mi.material_override = null
+		_env.background_color = background
+		if _list.get("focus") != null:
+			var focus := Vector3(0, float(_list["focus"]), 0)
+			var face_size := float(_list.get("face_size", 0.5))
+			var face_px := int(_list.get("face_px", 360))
+			_viewport.size = Vector2i(face_px, face_px)
+			var p := deg_to_rad(12.0)
+			var distance := face_size * 0.5 / tan(deg_to_rad(_camera.fov * 0.5))
+			_camera.position = focus + Vector3(0, sin(p), cos(p)) * distance
+			_camera.look_at(focus, Vector3.UP)
+			_camera.near = 0.01
+			_camera.far = distance + 50.0
+			# yaw 0 and 35 under the key light, then yaw 0 under a low light from the side
+			var shots := [
+				[0.0, Vector3(-35, -40, 0)], [35.0, Vector3(-35, -40, 0)], [0.0, Vector3(-12, -75, 0)]
+			]
+			for k in shots.size():
+				_stage.rotation.y = deg_to_rad(float(shots[k][0]))
+				key.rotation_degrees = shots[k][1]
+				await _capture("%s/%d_face_%d.png" % [_out, i, k])
+	var file := FileAccess.open("%s/info.json" % _out, FileAccess.WRITE)
+	file.store_string(JSON.stringify({"models": info}))
+	file.close()
+	quit(0)
+
+
+## One camera for every yaw: fits the box seen from `pitch` degrees above however the
+## model turns about its own vertical axis, so every view of a turnaround shares a scale.
+func _fit_turning(box: AABB, pitch: float, margin: float) -> void:
+	var centre := box.get_center()
+	var axis := Vector3(0, centre.y, 0)
+	var half := box.size * 0.5
+	var reach := 0.0
+	for c in 8:
+		var corner := box.get_endpoint(c)
+		reach = maxf(reach, Vector2(corner.x, corner.z).length())
+	var aspect := float(_viewport.size.x) / float(_viewport.size.y)
+	var p := deg_to_rad(pitch)
+	var vfov := deg_to_rad(_camera.fov)
+	var hfov := 2.0 * atan(tan(vfov * 0.5) * aspect)
+	var vert := half.y * cos(p) + reach * sin(p)
+	var dist_v := vert * (1.0 + margin) / tan(vfov * 0.5) + reach
+	var dist_h := reach * (1.0 + margin) / tan(hfov * 0.5) + reach
+	var distance := maxf(dist_v, dist_h)
+	_place_camera(axis, Vector3(0, sin(p), cos(p)), distance, reach + half.y)
 
 
 func _load_model(path: String) -> Node3D:

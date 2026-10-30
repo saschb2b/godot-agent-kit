@@ -429,10 +429,36 @@ def _painted_material(project: Path, style: Style) -> str:
     return f"res://{rel}"
 
 
+def is_toon(name: str) -> bool:
+    """A toon material by name: toon, toon_* or *_toon (e.g. hero_toon)."""
+    return name == "toon" or name.startswith("toon_") or name.endswith("_toon")
+
+
+TOON_MATERIAL_TRES = """[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://materials/toon.gdshader" id="1"]
+
+[resource]
+resource_name = "{name}"
+shader = ExtResource("1")
+"""
+
+
+def _toon_materials(project: Path, rel: str) -> None:
+    """A model's toon or toon_* material gets res://materials/<name>.tres over the kit's
+    toon.gdshader when the project has none (a *_toon material is the project's own)."""
+    for name in meshes.analyze_model(project / rel)["material_names"]:
+        if (name == "toon" or name.startswith("toon_")) and not (project / "materials" / f"{name}.tres").exists():
+            _install_template(project, "toon.gdshader", "// godot-agent toon")
+            (project / "materials" / f"{name}.tres").write_text(TOON_MATERIAL_TRES.format(name=name))
+
+
 def _model_import_file(project: Path, rel: str, materials: str | dict) -> None:
     """Points the glTF's materials at the project's, by name: "painted" at the
     vertex-colour material (Godot's glTF importer ignores COLOR_0 for albedo),
-    foliage_* at their card materials, and so on.
+    foliage_* at their card materials, and so on. A model with a toon material imports
+    without LODs: its face shapes lie a fraction of a millimetre above the skin, and a
+    simplified mesh would swallow them.
 
     Godot keeps these params and fills in the rest on import; an existing uid is
     kept so scenes that reference the model by uid stay valid.
@@ -441,10 +467,12 @@ def _model_import_file(project: Path, rel: str, materials: str | dict) -> None:
         materials = {meshes.PAINTED_MATERIAL: materials}
     used = set(meshes.analyze_model(project / rel)["material_names"])
     wanted = {name: path for name, path in sorted(materials.items()) if name in used}
+    no_lods = any(is_toon(name) for name in used)
     file = project / f"{rel}.import"
     text = file.read_text() if file.exists() else ""
     if all(f'"use_external/path": "{path}"' in text for path in wanted.values()) and \
-            text.count('"use_external/enabled": true') == len(wanted):
+            text.count('"use_external/enabled": true') == len(wanted) and \
+            (not no_lods or "meshes/generate_lods=false" in text):
         return
     uid = re.search(r'^uid="([^"]+)"', text, re.M)
     lines = ["[remap]", "", 'importer="scene"', 'type="PackedScene"']
@@ -452,7 +480,8 @@ def _model_import_file(project: Path, rel: str, materials: str | dict) -> None:
         lines.append(f'uid="{uid[1]}"')
     entries = [f'"{name}": {{\n"use_external/enabled": true,\n"use_external/path": "{path}"\n}}'
                for name, path in wanted.items()]
-    lines += ["", "[params]", "", "_subresources={", '"materials": {', ",\n".join(entries), "}", "}", ""]
+    lines += ["", "[params]", ""] + (["meshes/generate_lods=false"] if no_lods else [])
+    lines += ["_subresources={", '"materials": {', ",\n".join(entries), "}", "}", ""]
     file.write_text("\n".join(lines))
 
 
@@ -613,12 +642,15 @@ def _install_template(project: Path, name: str, header: str) -> None:
 
 def make_blender(project_dir: str, script: str, dest: str, seed: int = 1, params: dict | None = None,
                  style_path: str | None = None, review: bool = False, import_into_godot: bool = True,
-                 record: bool = True, timeout: int = 600) -> dict:
+                 record: bool = True, timeout: int = 600, turnaround: bool = False) -> dict:
     """Runs a Blender build script headless and exports its scene to dest (.glb).
 
-    The script builds a model with the kit's `gab` helpers (godot_agent/blender/gab.py).
-    Materials map to the project's by name, the recipe (script, seed, params) is
-    recorded for `asset regen`, and the model is checked like any other.
+    The script builds a model with the kit's `gab` helpers (godot_agent/blender/gab.py)
+    and, for characters, `chibi` (godot_agent/blender/chibi.py). Materials map to the
+    project's by name (a `toon` material gets the kit's toon shader), the recipe (script,
+    seed, params) is recorded for `asset regen`, and the model is checked like any other.
+    turnaround renders a character sheet (render_turnaround) as the preview, with the face
+    close up when the build printed where it is (chibi's finish does).
     """
     import shutil
     project = resolve_project(project_dir)
@@ -640,7 +672,7 @@ def make_blender(project_dir: str, script: str, dest: str, seed: int = 1, params
     runner = Path(__file__).resolve().parent.parent / "blender" / "runner.py"
     cmd = [blender, "-b", "--factory-startup", "--python-exit-code", "1", "-P", str(runner), "--",
            "--script", str(source), "--out", str(target), "--seed", str(seed),
-           "--params", json.dumps(params or {})]
+           "--params", json.dumps(params or {}), "--project", str(project)]
     from ..runner import render_slot
     with render_slot():  # (a Blender build holds as much memory as a rendered Godot run)
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -649,6 +681,7 @@ def make_blender(project_dir: str, script: str, dest: str, seed: int = 1, params
         errors = [line for line in log if "Error" in line or "Traceback" in line or line.startswith("  File")]
         raise GodotAgentError("blender build failed:\n" + "\n".join((errors or log)[-25:]))
     _painted_material(project, style)
+    _toon_materials(project, rel)
     _model_import_file(project, rel, _existing_material(project, style))
     script_ref = source.resolve().relative_to(project).as_posix() if source.resolve().is_relative_to(project) \
         else str(source.resolve())
@@ -663,7 +696,12 @@ def make_blender(project_dir: str, script: str, dest: str, seed: int = 1, params
         if load_errors := _verify_load(project, [rel]):
             report["ok"] = False
             report["problems"] += load_errors
-    if review:
+    if turnaround:
+        face = re.search(r"--focus ([-\d.]+) --face-size ([\d.]+)", proc.stdout)
+        report["preview"] = str(meshes.render_turnaround(
+            project, [_model_item(report)], _out_dir(project, "blender"), material=_existing_material(project, style),
+            focus=float(face[1]) if face else None, face_size=float(face[2]) if face else None))
+    elif review:
         report["preview"] = str(meshes.render_review(project, [_model_item(report)], _out_dir(project, "blender"),
                                                      _model_background(style), material=_existing_material(project, style)))
     return report
@@ -713,8 +751,11 @@ def make_ui(project_dir: str, preset: str, dest: str, size: list[int], fill: str
 # ── review, regen ──
 
 def review(project_dir: str, paths: list[str] | None = None, style_path: str | None = None,
-           out: str | None = None) -> list[str]:
-    """Review sheets: images on the game's background, audio as waveform + spectrogram."""
+           out: str | None = None, turnaround: bool = False, focus: float | None = None,
+           face_size: float | None = None) -> list[str]:
+    """Review sheets: images on the game's background, audio as waveform + spectrogram,
+    models as turntables, or with turnaround as character sheets (turnaround, silhouettes
+    and, given the face's height as focus, the face close up)."""
     project = resolve_project(project_dir)
     style = Style.load(project, style_path)
     image_items, audio_items, model_items = [], [], []
@@ -736,13 +777,17 @@ def review(project_dir: str, paths: list[str] | None = None, style_path: str | N
             audio_items.append({"path": rel, "ok": result["ok"], "summary": summary})
     if not image_items and not audio_items and not model_items:
         raise GodotAgentError("no assets matched")
-    folder = Path(out).expanduser() if out else _out_dir(project, "review")
+    folder = Path(out).expanduser().resolve() if out else _out_dir(project, "review")
     sheets = []
     if image_items:
         sheets.append(str(images.review_sheet(image_items, project, folder / "images.png", style.background)))
     if audio_items:
         sheets.append(str(audio.review_sheet(audio_items[:24], project, folder / "audio.png")))
-    if model_items:
+    if model_items and turnaround:
+        sheets.append(str(meshes.render_turnaround(project, model_items[:6], folder / "turnaround",
+                                                   material=_existing_material(project, style), focus=focus,
+                                                   face_size=face_size)))
+    elif model_items:
         sheets.append(str(meshes.render_review(project, model_items[:16], folder / "models",
                                                _model_background(style), material=_existing_material(project, style))))
     return sheets

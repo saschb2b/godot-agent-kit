@@ -1031,3 +1031,75 @@ def render_review(project: Path, items: list[dict], out: Path, background: str, 
     target = out / "models.png"
     sheet.save(target)
     return target
+
+
+TURNAROUND_VIEWS = (("front", 0), ("3/4", 35), ("side", 90), ("back", 180))
+
+
+def render_turnaround(project: Path, items: list[dict], out: Path, background: str = "#2b2622",
+                      material: dict | None = None, focus: float | None = None, face_size: float | None = None,
+                      pitch: float = 10.0, top_pitch: float = 55.0, timeout: int = 300) -> Path:
+    """A character sheet per model, rendered by Godot in the game's materials: a turnaround
+    (front, 3/4, side, back from one eye-level camera, so every view shares a scale), the
+    same views as black silhouettes plus one from a strategy camera (`top_pitch`), and with
+    `focus` (the face's height in model units) the face close up at yaw 0 and 35 and under a
+    low side light, `face_size` metres tall (default 0.75 x focus).
+
+    items: [{"path": rel or absolute, "ok": bool, "summary": "..."}]. Returns the sheet.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    frames = out / "frames"
+    models = [{"path": str((project / it["path"]) if not Path(it["path"]).is_absolute() else it["path"]),
+               "label": Path(it["path"]).stem} for it in items]
+    size, sil = (300, 440), (200, 290)
+    listing = {"turnaround": True, "models": models, "views": [list(v) for v in TURNAROUND_VIEWS],
+               "size": list(size), "sil_size": list(sil), "pitch": pitch, "top_pitch": top_pitch,
+               "background": background, "materials": material or {}}
+    if focus is not None:
+        listing.update({"focus": focus, "face_size": face_size or round(0.75 * focus, 3), "face_px": 360})
+    _run_model_script(project, listing, frames, timeout)
+
+    font = ImageFont.load_default()
+    pad, label_h = 8, 16
+    blocks = []   # per model: [(title, [(tile label, file)])]
+    for i, item in enumerate(items):
+        rows = [(f"{'OK  ' if item.get('ok', True) else 'FAIL'}  {item['path']}  {item.get('summary', '')}",
+                 [(name, frames / f"{i}_turn_{v}.png") for v, (name, _) in enumerate(TURNAROUND_VIEWS)]),
+                ("silhouettes: the views above, and from a strategy camera",
+                 [(name, frames / f"{i}_sil_{v}.png") for v, (name, _) in enumerate(TURNAROUND_VIEWS)] +
+                 [(f"pitch {top_pitch:g}", frames / f"{i}_sil_top.png")])]
+        if focus is not None:
+            rows.append((f"face at y {focus:g}", [("yaw 0", frames / f"{i}_face_0.png"),
+                                                   ("yaw 35", frames / f"{i}_face_1.png"),
+                                                   ("low side light", frames / f"{i}_face_2.png")]))
+        blocks.append(rows)
+    opened = {}
+    for rows in blocks:
+        for _, tiles in rows:
+            for _, f in tiles:
+                if f.exists():
+                    opened[f] = Image.open(f).convert("RGB")
+    width = pad + max(sum(opened[f].width + pad for _, f in tiles if f in opened) for rows in blocks for _, tiles in rows)
+    height = pad + sum(label_h + max((opened[f].height for _, f in tiles if f in opened), default=0) + label_h + pad
+                       for rows in blocks for _, tiles in rows)
+    sheet = Image.new("RGB", (max(width, 400), height), (22, 22, 26))
+    draw = ImageDraw.Draw(sheet)
+    y = pad
+    for rows in blocks:
+        for title, tiles in rows:
+            draw.text((pad, y + 2), title, font=font, fill=(225, 225, 230))
+            y += label_h
+            x, tallest = pad, 0
+            for name, f in tiles:
+                if f not in opened:
+                    continue
+                img = opened[f]
+                sheet.paste(img, (x, y + label_h))
+                draw.text((x + 2, y + 2), name, font=font, fill=(170, 170, 180))
+                x += img.width + pad
+                tallest = max(tallest, img.height)
+            y += label_h + tallest + pad
+    target = out / "turnaround.png"
+    sheet.save(target)
+    return target

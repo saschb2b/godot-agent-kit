@@ -217,13 +217,14 @@ assets it already has. The draft records the status quo, so review and tighten i
 | Pixel art you draw | aseprite MCP: `load_palette` with the project's `.gpl`, draw, `render_sprite` to look, save; then `asset aseprite <project> x.aseprite --to res://art/x` (`asset_aseprite_import`) gives a sheet plus a SpriteFrames `.tres`, one animation per tag |
 | Low-poly 3D models | `asset mesh <project> <preset or recipe.json> --to res://models/x.glb --seed 3 --variants 4 [--color leaf=#d08a2e] --review` (`asset_mesh`); presets: tree_round, tree_pine, bush, rock, grass_tuft, flower, mushroom, stump, pumpkin, crystal |
 | UI icons from models | `asset icon <project> res://models/x.glb --to res://ui/icons/x.png --size 64 [--frame gold --frame-background "#2b3d5c"]` (`asset_icon`): 3/4 view, transparent or as a framed command button; add `--frame-edge "#0a1226"` for the Reforged-style button: a glow from the background to the edge colour, the subject cropped to fill it, rim-lit and shadowed, rendered at 2x; with it `--frame hue` draws the border in the backdrop's own colours (a dark line, a light catch at the top left) so the subject is the brightest thing, and `--frame-foot 0.22` keeps the bottom clear and shaded for a cost. For sharp icons on large screens render twice the size they are drawn at and give their `.import` mipmaps |
-| Organic or detailed 3D models (creatures with walk cycles, trees with card foliage) | `asset blender <project> art_src/blender/x.py --to res://models/x.glb --seed 3 [--param leaf=#3f7a2e] --review` (`asset_blender`): runs your Blender build script headless, see Blender models below |
+| Organic or detailed 3D models (creatures with walk cycles, trees with card foliage, chibi toon characters) | `asset blender <project> art_src/blender/x.py --to res://models/x.glb --seed 3 [--param leaf=#3f7a2e] --review` (`asset_blender`): runs your Blender build script headless, see Blender models below; `--turnaround` instead of `--review` renders a character sheet |
 | Foliage cards | `asset texture <project> foliage_pine --to res://textures/foliage_pine.png` (`asset_texture`): grey alpha-cut card (presets foliage_pine, foliage_leaves, foliage_grass, foliage_fern) plus `materials/foliage_pine.tres` over the kit's swaying `foliage.gdshader`; models tint it by vertex colour |
 | Painted terrain textures | `asset texture <project> grass --to res://textures/grass.png [--size 256 --color mid=#4f8a32]` (`asset_texture`): seamless, mipmapped; presets grass, meadow, path, dirt, sand, mud, rock, cobble. Sample with world-space UVs and blend by masks in a terrain shader; mix two scales to hide the repeat |
 | Painted UI frames | `asset ui <project> panel --to res://ui/frames/console --size 256x192 --fill stone --trim gold` (`asset_ui`): nine-slice PNG plus StyleBoxTexture `.tres`; presets panel, bar, tooltip, button (four state files), slot, frame; fills stone, wood, leather, slate; trims gold, iron, bronze, wood |
 | A whole strategy-game console | `asset ui <project> console --spec art_src/ui/console.json --to res://ui/console` (`asset_ui`): every piece of a bottom console in one material, weathered bronze over stone lit as a height field: two wings with recessed wells (minimap, command card), a centre piece rising into an arched, crested portrait window, a tiling rail, a resource strip that nine-slices leftwards, an end plate, a banner, tooltip and button nine-slices. One bronze rim follows every silhouette and meets curves in round fillets; wells read by shade alone; the portrait window gets the one moulding. The spec (JSON in the game) overrides the kit's defaults (`CONSOLE` in `assets/ui.py`); `"scale": 2` paints HD art with mipmaps for the HUD to draw at half size (the `.tres` margins are then in texels). `layout.json` beside the pieces gives the wells, window, backdrop and text area in layout pixels, plus the scale, so load it in the HUD instead of copying numbers |
 | Sound effects | `asset sfx <project> <preset> --to res://sfx/x.wav --seed 3 --variants 4` (`asset_sfx`); presets: pickup, laser, explosion, powerup, hit, jump, blip, door, step, magic, death, arrow, cannon, build, horn |
 | Look at assets | `asset review <project> [paths]` (`asset_review`): images on the game's background color, models as four-angle turntables plus a true-scale lineup on a 1-unit grid, audio as waveform over spectrogram |
+| Look at a character | `asset review <project> res://models/hero.glb --turnaround [--focus 0.66 --face-size 0.5]` (`asset_review` with `turnaround`): front, 3/4, side and back from one eye-level camera in the game's materials, the same views as silhouettes plus one from a strategy camera (does it read as a black shape?), and with `--focus` (the face's height) the face close up at yaw 0, 35 and under a low side light |
 | Rebuild exactly | `asset regen <project> <path>` (`asset_regen`), from the recipe in `asset_manifest.json` |
 
 Then look at new art in context: `godot-agent run` with a capture of the scene that uses it.
@@ -252,6 +253,41 @@ armature. Read `godot_agent/blender/gab.py`: its docstrings are the API. In shor
   weights), `animate(arm, "walk", frames, keys)` (a looping action; its name is the animation's).
   In Godot the model's AnimationPlayer has it: loop it and, for repeatable runs, set the player's
   callback mode to manual and `advance(delta)` from `_physics_process`.
+- Smooth shapes, each one closed surface of rings that shades calmly: `blob` (superellipsoid, with
+  per-direction `shape` and chosen ring latitudes), `tube` (along a polyline; flat sections; 0 ends
+  in a point), `loft` (rings), `teardrop` (a feather or leaf with a curled tip), `lobes` (a braid),
+  `catmull`/`resample` (paths), `ring`, `cull(obj, hidden)` (drop faces nobody sees), `crease`, and
+  `transform`/`about`/`rot` to pose whole parts. `mix_hex`, `lerp`, `smoothstep`, `gpl_swatches`.
+- Decals: `Decals(obj, lift_dir).decal(name, cells, lift)` cuts flat convex 2D cells (seen from the
+  front) by the surface's own triangles and lifts them, so a painted shape lies exactly on what the
+  renderer draws: `ellipse()`, `stroke()` + `strip_cells()` make the cells.
+
+#### Chibi characters
+
+`import chibi` (godot_agent/blender/chibi.py, its docstrings are the API) builds a chibi toon figure
+of about a dozen smooth parts, 2.5 to 3 heads tall, in flat swatches with the shade class in the
+vertex alpha (cloth 1.0, skin 0.75, face paint 0.5, unlit glint 0.25). `chibi.Figure(SPEC)`, then in
+order: `head()`, `face()`, `cap(hairline, colour)` and a few `lock()`s, `hat(...)` (a lofted crown, a
+band, a brim swept from a section, tilted) or `hood(...)`, `bell(...)` (coat), `neck`, `arm`,
+`mitten`, `boot`, your own prop from the shape helpers, `pose()` whole parts, `finish(name,
+check=True)`. The face is a few numbers: `{"expression": "cheerful", "iris": ..., "brow": ...}` over
+`FACE_DEFAULTS`; expressions are friendly, cheerful, composed, determined, surprised, worried, sleepy;
+any key (eye size, lid cut, brow tilt, mouth kind) overrides. `finish` writes one normal field for
+head, face and hair (the terminator crosses them as one curve), joins one mesh, prints triangles by part, swatches and the face's height for `--turnaround --focus`,
+and with `check` fails off the palette (`"palette": "palettes/x.gpl"`), over budget (4,000; a bust
+3,000) or outside the heads range. `bust_cut` makes the portrait bust. Start from the kit's fixture,
+tests/fixture/art_src/blender/gardener.py.
+
+What keeps a toon character clean: few, large, well-separated parts; one swatch per part or two
+split on an edge loop; no buttons, stitching or folds; an oversized signature hat or prop; big eyes
+of flat shapes with one highlight, floating brows, a button nose, blush, mittens and chunky boots;
+whole parts posed, never bent; the same face swatches across a roster. Check the silhouettes first.
+
+The figure's material is `toon` (spec `"material"` names another): `asset blender` gives a model's
+`toon` or `toon_*` material `res://materials/<name>.tres` over the kit's `toon.gdshader` (two tones,
+a crisp terminator, chosen shadow tints per shade class, a back rim, no specular; uniforms tune it,
+`compat_lift`/`compat_gamma` match the Compatibility renderer) unless the project has one, and
+imports any `toon`, `toon_*` or `*_toon` model without LODs, which would swallow the face shapes.
 
 The command maps glTF materials to the project's by name (`painted` and `foliage_*` to their
 `.tres`, others kept), records script, seed and params for `asset regen`, validates against the
