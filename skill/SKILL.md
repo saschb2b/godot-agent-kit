@@ -51,7 +51,9 @@ at, or a clean check. Report failures with the tool output.
 }
 ```
 
-Top-level keys: `scene` (default main scene), `seed`, `timeout_frames` (3600), `fail_on_errors`
+Top-level keys: `scene` (default main scene), `seed`, `user_files` (user:// path → text, written into the
+run's private user:// before the game starts: a saved profile, a fixed device key, so a game that draws a
+random install key or name still runs the same twice), `timeout_frames` (3600), `fail_on_errors`
 (true: any engine error fails the run), `ignore_errors` (regex list), `watch` (name → expression),
 `watch_every` (frames, writes watches.csv), `capture_every`, `observe_groups`, `observe_props`,
 `time_scale` (game time per frame for node-based games: 8 makes each frame 8/60 s of game time by

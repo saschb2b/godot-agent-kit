@@ -159,6 +159,43 @@ def project_name(project: Path) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-") or "project"
 
 
+def user_dir(project: Path, data_home: str | os.PathLike) -> Path:
+    """Where Godot keeps user:// when XDG_DATA_HOME is `data_home` (what each run gets):
+    app_userdata/<config/name>, or the custom user dir the project names."""
+    name = project_setting(project, "application", "config/name") or project.name
+    if project_setting(project, "application", "config/use_custom_user_dir") == "true":
+        folder = project_setting(project, "application", "config/custom_user_dir_name") or name
+        return Path(data_home) / _safe_dir_name(folder)
+    return Path(data_home) / "godot" / "app_userdata" / _safe_dir_name(name)
+
+
+def _safe_dir_name(name: str) -> str:
+    """Godot's String.validate_filename for a folder name: the characters a file system
+    refuses become underscores."""
+    return re.sub(r'[:*?"<>|/\\]', "_", name).strip() or "project"
+
+
+def write_user_files(project: Path, data_home: str | os.PathLike, files: dict) -> list[Path]:
+    """A scenario's `user_files` ({"net.cfg": "[device]\\n..."}), written into the run's
+    private user:// before the game starts: a saved profile, a fixed device key. Paths are
+    relative to user:// and stay inside it."""
+    if not files:
+        return []
+    if not isinstance(files, dict):
+        raise GodotAgentError("user_files must map user:// paths to their text")
+    root = user_dir(project, data_home)
+    written = []
+    for rel, text in files.items():
+        relative = Path(str(rel).removeprefix("user://"))
+        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+            raise GodotAgentError(f"user_files: {rel!r} is not a path inside user://")
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(str(text), encoding="utf-8")
+        written.append(target)
+    return written
+
+
 def refresh_class_cache(godot: str, project: Path, force: bool = False, timeout: int = 900) -> str | None:
     """Re-imports the project when scripts are newer than Godot's class cache.
 

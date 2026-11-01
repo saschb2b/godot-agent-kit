@@ -44,7 +44,10 @@ godot-agent api search tween property
 godot-agent api show Input.parse_input_event
 ```
 
-The scenario format and agent workflow are documented in [skill/SKILL.md](skill/SKILL.md).
+The scenario format and agent workflow are documented in [skill/SKILL.md](skill/SKILL.md). Each run gets a
+private user://; a scenario's `"user_files": {"net.cfg": "..."}` is written into it before the game starts,
+so a saved profile or a device key the game would otherwise draw at random is the same on every run (and
+`--determinism` can compare them).
 
 ### Lockstep and networked games
 

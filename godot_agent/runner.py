@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import sheet, topology
 from .env import (CACHE_DIR, HEADLESS_GB, MAX_RSS_GB, RUNTIME_DIR, GodotAgentError, admit, find_godot, project_name, rss_gb,
-                  refresh_class_cache, resolve_project, virtual_display)
+                  refresh_class_cache, resolve_project, virtual_display, write_user_files)
 
 STEP_KINDS = ("wait", "wait_until", "wait_signal", "press", "release", "tap", "key", "click", "hover",
               "eval", "set", "scene", "assert", "capture", "observe", "log", "repeat", "set_ticks_per_frame")
@@ -198,6 +198,8 @@ def launch_command(godot: str, project: Path, job: Job, display: str | None, vis
     # touch the developer's real save files, and parallel runs cannot collide.
     data_home = tempfile.mkdtemp(prefix="godot-agent-data-")
     env = dict(os.environ, XDG_DATA_HOME=data_home)
+    # (what the scenario's user:// starts with: a saved profile, a fixed device key)
+    write_user_files(project, data_home, job.scenario.get("user_files"))
     cmd = [godot]
     rendered = job.render and (display is not None or visible)
     if not rendered:
