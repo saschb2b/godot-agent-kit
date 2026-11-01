@@ -267,6 +267,16 @@ def run_capped(cmd: list[str], timeout: float, env: dict | None = None) -> tuple
     return (-1 if reason else proc.returncode), b"".join(chunks), reason
 
 
+SOFTWARE_GPUS = ("llvmpipe", "SwiftShader", "softpipe", "lavapipe")
+
+
+def software_gpu(log_text: str) -> str | None:
+    """The software rasterizer a rendered run drew with (Godot names its device in the log's
+    first lines), or None for a real GPU: such runs are many times slower."""
+    head = log_text[:4000]
+    return next((name for name in SOFTWARE_GPUS if name in head), None)
+
+
 def make_record(job: Job, returncode: int, log_text: str, rendered: bool, started: float,
                 timeout_reason: str | None = None) -> dict:
     """One process's evidence: its result.json, plus engine errors from its log."""
@@ -277,6 +287,8 @@ def make_record(job: Job, returncode: int, log_text: str, rendered: bool, starte
 
     record: dict = {"name": job.name, "out_dir": str(job.out_dir), "rendered": rendered,
                     "wall_s": round(time.monotonic() - started, 2), "exit_code": returncode}
+    if rendered and (soft := software_gpu(log_text)):
+        record["software_gpu"] = soft
     result_path = job.out_dir / "result.json"
     if not result_path.exists():
         record.update(passed=False, frames=0, log_errors=log_errors[:10],
@@ -420,7 +432,7 @@ def run_scenarios(project: str | os.PathLike, paths: list[str] | None = None, in
                 with limit:
                     record = run_job(godot, project_path, job, display, visible, timeout, renderer)
             if warnings := kit_warnings(job.scenario, visible):
-                record["notes"] = warnings
+                record["notes"] = record.get("notes", []) + warnings
             return record
 
         with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
@@ -445,6 +457,9 @@ def run_scenarios(project: str | os.PathLike, paths: list[str] | None = None, in
                                           "(set \"deterministic\": true if its clients are deterministic anyway)")
         records.append(record)
 
+    if soft := next((r["software_gpu"] for r in records if r.get("software_gpu")), None):
+        notes.append(f"rendered on a software GPU ({soft}): rendered runs are many times slower, so a timeout in "
+                     "one may be the renderer's, not the game's (-j 1, or a display with a GPU)")
     summary = {
         "project": str(project_path),
         "godot": godot,
